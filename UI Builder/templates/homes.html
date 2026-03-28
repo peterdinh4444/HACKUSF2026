@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Homes{% endblock %}
+{% block content %}
+<div class="page-hero">
+  <p class="page-hero__eyebrow">Address lookup</p>
+  <h1 class="page-title">Home risk assessment</h1>
+  <p class="lede">Geocode your address, match our Tampa metro ZIP reference, then load evacuation GIS, threat index, traffic, power, and river gauges.</p>
+</div>
+
+<section class="panel">
+  <h2 class="card__title">Look up</h2>
+  <form id="assess-form" class="homes-form">
+    <label class="homes-label" for="addr">Street address or 5-digit ZIP</label>
+    <input class="homes-input" type="text" id="addr" name="address" placeholder="500 Channelside Dr, Tampa, FL — or 33547" autocomplete="street-address" required />
+    <label class="homes-label" for="nick">Label (when saving)</label>
+    <input class="homes-input" type="text" id="nick" name="nickname" placeholder="Mom’s condo" />
+    <div class="homes-actions">
+      <button type="submit" class="btn btn--primary" id="btn-assess">Run assessment</button>
+      <button type="button" class="btn" id="btn-save">Save to profile</button>
+    </div>
+  </form>
+  <p class="panel__hint" id="form-status" aria-live="polite"></p>
+</section>
+
+<section class="panel panel--hero panel--hero-premium" id="result-panel" hidden>
+  <div class="hero-premium__glow" aria-hidden="true"></div>
+  <div class="threat-hero threat-hero--premium">
+    <div class="score-dial-wrap">
+      <div class="score-dial score-dial--low" id="home-score-dial" aria-live="polite">
+        <svg class="score-dial__svg" viewBox="0 0 120 120" aria-hidden="true">
+          <g transform="rotate(-90 60 60)">
+            <circle class="score-dial__track" cx="60" cy="60" r="44" fill="none" stroke-width="7" />
+            <circle class="score-dial__arc" cx="60" cy="60" r="44" fill="none" stroke-width="7" stroke-linecap="round" />
+          </g>
+        </svg>
+        <div class="score-dial__inner">
+          <span class="score-dial__value" id="home-threat-num">—</span>
+          <span class="score-dial__denom">/ 100</span>
+          <span class="score-dial__label">Index</span>
+        </div>
+      </div>
+      <div class="score-dial-meta">
+        <div id="home-threat-badge" class="score-dial-meta__badge"></div>
+        <p class="score-dial-meta__caption">Based on live feeds at this location</p>
+      </div>
+    </div>
+    <div class="threat-copy">
+      <h2 class="threat-copy__title">Location</h2>
+      <p class="disclaimer" id="home-loc-line"></p>
+      <h3 class="card__title">Signals</h3>
+      <ul class="threat-reasons" id="home-reasons"></ul>
+    </div>
+  </div>
+</section>
+
+<div class="grid-two">
+  <section class="panel">
+    <h2 class="card__title">Evacuation (GIS)</h2>
+    <table class="digest"><tbody id="home-evac-block"></tbody></table>
+  </section>
+  <section class="panel">
+    <h2 class="card__title">ZIP reference</h2>
+    <p class="panel__hint">Heuristic fields from our local DB — confirm with official maps.</p>
+    <table class="digest"><tbody id="home-zip-block"></tbody></table>
+  </section>
+</div>
+
+<section class="panel">
+  <h2 class="card__title">Infrastructure</h2>
+  <table class="digest"><tbody id="home-infra-block"></tbody></table>
+</section>
+
+<section class="panel panel--wide">
+  <div class="panel-head">
+    <h2 class="card__title" style="margin:0">Saved homes</h2>
+    <button type="button" class="btn btn--sm" id="reload-profiles">Reload</button>
+  </div>
+  <ul class="homes-profile-list" id="profile-list"></ul>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/homes.js') }}" type="module"></script>
+{% endblock %}

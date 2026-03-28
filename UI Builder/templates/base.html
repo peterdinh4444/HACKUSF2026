@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Hurricane Hub{% endblock %} · Tampa Bay</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <header class="nav">
+    <div class="shell nav__inner">
+      <a class="nav__logo" href="{{ url_for('index') }}">Hurricane Hub</a>
+      <nav class="nav__links" aria-label="Primary">
+        <a class="nav__link{% if request.endpoint == 'index' %} nav__link--active{% endif %}" href="{{ url_for('index') }}">Overview</a>
+        <a class="nav__link{% if request.endpoint == 'homes_page' %} nav__link--active{% endif %}" href="{{ url_for('homes_page') }}">Homes</a>
+      </nav>
+      <div class="nav__auth">
+        {% if current_user %}
+        <span class="nav__user" title="Signed in">{{ current_user.username }}</span>
+        <form class="nav__logout" action="{{ url_for('logout') }}" method="post">
+          <button type="submit" class="btn btn--sm btn--ghost">Log out</button>
+        </form>
+        {% else %}
+        <a class="btn btn--sm btn--ghost" href="{{ url_for('login') }}">Log in</a>
+        <a class="btn btn--sm btn--primary" href="{{ url_for('register') }}">Sign up</a>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <main class="shell main">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <ul class="flash-list" role="status">
+        {% for cat, msg in messages %}
+        <li class="flash flash--{{ cat }}">{{ msg }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="shell site-foot">
+    <p>Public-data prototype for Tampa Bay storm readiness. Not official guidance — use <a href="https://www.weather.gov/tbw/" rel="noopener">NWS Tampa Bay</a> and county emergency managers.</p>
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
