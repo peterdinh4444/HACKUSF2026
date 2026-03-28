@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Heat Map{% endblock %}
+{% block head_extra %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+{% endblock %}
+{% block content %}
+<div class="page-hero">
+  <p class="page-hero__eyebrow">Visualization</p>
+  <h1 class="page-title">Flood Risk Heat Map</h1>
+  <p class="lede">Real-time interactive heat map of Tampa metro ZIP codes showing current flood threat levels based on live weather feeds and storm data.</p>
+</div>
+
+<section class="panel">
+  <h2 class="card__title">Simulation Mode</h2>
+  <div class="homes-actions">
+    <button type="button" class="btn btn--primary" id="btn-realtime">Real-time</button>
+    <button type="button" class="btn" id="btn-mild">Mild Storm</button>
+    <button type="button" class="btn" id="btn-big">Big Storm</button>
+  </div>
+  <p class="panel__hint" id="sim-status">Currently showing real-time data.</p>
+</section>
+
+<section class="panel">
+  <div id="map" style="height: 600px; width: 100%;"></div>
+  <p class="panel__hint">Heat intensity represents current flood threat levels from live data feeds. Blue indicates low risk, red indicates high risk.</p>
+</section>
+
+<script>
+
+let currentSimulate = '';
+let heatLayer = null;
+let map;  // Declare globally
+
+function removeAllHeatLayers() {
+  // Remove all heat layers from the map (robust)
+  map.eachLayer(function(layer) {
+    if (layer instanceof L.HeatLayer) {
+      map.removeLayer(layer);
+    }
+  });
+  heatLayer = null;
+}
+
+function debugMapLayers() {
+  let count = 0;
+  map.eachLayer(function(layer) {
+    count++;
+    console.log('Layer', count, layer);
+  });
+}
+
+function loadHeatMap() {
+  // Remove all heat layers robustly
+  removeAllHeatLayers();
+  debugMapLayers();
+
+  const url = currentSimulate ? `/api/heatmap/data?simulate=${currentSimulate}&t=${Date.now()}` : `/api/heatmap/data?t=${Date.now()}`;
+  console.log('Loading heat map from:', url);
+  fetch(url)
+    .then(response => response.json())
+    .then(data => {
+      console.log('Received data:', data.heat_data.length, 'points');
+      const heatData = data.heat_data;
+      console.log('First 5 data points:', heatData.slice(0, 5));  // Debug: log first 5 points
+
+      // Add new heat layer
+      heatLayer = L.heatLayer(heatData, {
+        radius: 25,
+        blur: 15,
+        maxZoom: 10,
+        max: 1.0,
+        gradient: {
+          0.0: 'blue',
+          0.2: 'lime',
+          0.4: 'yellow',
+          0.6: 'orange',
+          1.0: 'red'
+        }
+      }).addTo(map);
+      console.log('Heat layer added');
+      debugMapLayers();
+    })
+    .catch(error => {
+      console.error('Error loading heat map data:', error);
+      document.getElementById('map').innerHTML = '<p class="panel__hint">Error loading map data. Please try again later.</p>';
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  // Initialize map
+  map = L.map('map').setView([27.95, -82.45], 10);
+
+  // Add OpenStreetMap tiles with cache-busting
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png?t=' + Date.now(), {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+
+  // Load initial data
+  loadHeatMap();
+
+  // Button event listeners
+  document.getElementById('btn-realtime').addEventListener('click', function() {
+    currentSimulate = '';
+    document.getElementById('sim-status').textContent = 'Currently showing real-time data.';
+    // Update button styles
+    this.classList.add('btn--primary');
+    document.getElementById('btn-mild').classList.remove('btn--primary');
+    document.getElementById('btn-big').classList.remove('btn--primary');
+    loadHeatMap();
+  });
+
+  document.getElementById('btn-mild').addEventListener('click', function() {
+    currentSimulate = 'mild';
+    document.getElementById('sim-status').textContent = 'Simulating mild storm conditions (+30 threat points).';
+    // Update button styles
+    this.classList.add('btn--primary');
+    document.getElementById('btn-realtime').classList.remove('btn--primary');
+    document.getElementById('btn-big').classList.remove('btn--primary');
+    loadHeatMap();
+  });
+
+  document.getElementById('btn-big').addEventListener('click', function() {
+    currentSimulate = 'big';
+    document.getElementById('sim-status').textContent = 'Simulating big storm conditions (+70 threat points).';
+    // Update button styles
+    this.classList.add('btn--primary');
+    document.getElementById('btn-realtime').classList.remove('btn--primary');
+    document.getElementById('btn-mild').classList.remove('btn--primary');
+    loadHeatMap();
+  });
+});
+</script>
+{% endblock %}

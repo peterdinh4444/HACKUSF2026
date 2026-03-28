@@ -174,6 +174,16 @@ def stats() -> dict[str, Any]:
         conn.close()
 
 
+def get_all_zips() -> list[dict[str, Any]]:
+    seed_from_csv_if_empty()
+    conn = _connect()
+    try:
+        rows = conn.execute("SELECT * FROM zip_codes").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 

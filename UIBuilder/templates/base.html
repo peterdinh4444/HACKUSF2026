@@ -17,6 +17,7 @@
       <nav class="nav__links" aria-label="Primary">
         <a class="nav__link{% if request.endpoint == 'index' %} nav__link--active{% endif %}" href="{{ url_for('index') }}">Overview</a>
         <a class="nav__link{% if request.endpoint == 'homes_page' %} nav__link--active{% endif %}" href="{{ url_for('homes_page') }}">Homes</a>
+        <a class="nav__link{% if request.endpoint == 'heatmap_page' %} nav__link--active{% endif %}" href="{{ url_for('heatmap_page') }}">Heat Map</a>
       </nav>
       <div class="nav__auth">
         {% if current_user %}
