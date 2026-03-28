@@ -31,6 +31,7 @@ from services.home_assessment import assess_address, build_risk_card
 from services.regional_tampa import regional_lookup
 from services.tampa_db import (
     delete_home_profile,
+    get_all_zips,
     get_by_zip,
     get_home_profile,
     list_home_profiles,
@@ -43,6 +44,11 @@ from services.tampa_db import (
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me-in-production")
+
+
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
 
 
 def _session_user_id() -> int | None:
@@ -241,11 +247,53 @@ def tampa_zip_stats():
     return jsonify(zip_stats())
 
 
+@app.route("/api/tampa/zips/all")
+def tampa_zips_all():
+    seed_from_csv_if_empty()
+    return jsonify({"zips": get_all_zips()})
+
+
+@app.route("/api/heatmap/data")
+def heatmap_data():
+    seed_from_csv_if_empty()
+    zips = get_all_zips()
+    simulate = request.args.get("simulate", "").lower()
+    heat_data = []
+    
+    if simulate:
+        # For simulation, use fixed intensities to ensure visible change
+        intensity = 0.3 if simulate == "mild" else 0.7
+        for zip_row in zips:
+            lat, lon = zip_row["lat"], zip_row["lon"]
+            heat_data.append([lat, lon, intensity])
+    else:
+        # Real-time data
+        for zip_row in zips:
+            lat, lon = zip_row["lat"], zip_row["lon"]
+            try:
+                dash = aggregate_dashboard(lat=lat, lon=lon, verbose=False)
+                threat = dash.get("threat", {})
+                score = threat.get("score", 0)
+                # Normalize score to 0-1 for heat intensity
+                intensity = min(max(score / 100.0, 0.0), 1.0)
+                heat_data.append([lat, lon, intensity])
+            except Exception as e:
+                print(f"Error getting threat for {zip_row['zip']}: {e}")
+                heat_data.append([lat, lon, 0.0])
+    
+    return jsonify({"heat_data": heat_data})
+
+
 @app.route("/homes")
 @login_required
 def homes_page():
     seed_from_csv_if_empty()
     return render_template("homes.html")
+
+
+@app.route("/heatmap")
+def heatmap_page():
+    return render_template("heatmap.html")
 
 
 @app.route("/api/profiles/assess", methods=["POST"])
