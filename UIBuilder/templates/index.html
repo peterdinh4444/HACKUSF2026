@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<div class="page-hero">
+  <p class="page-hero__eyebrow">Tampa Bay region</p>
+  <h1 class="page-title">Storm readiness overview</h1>
+  <p class="lede">A single score and snapshot from public weather, water, and advisory data. <span class="coords-pill" id="coords-display" aria-live="polite"></span></p>
+</div>
+
+<section class="panel panel--hero panel--hero-premium">
+  <div class="hero-premium__glow" aria-hidden="true"></div>
+  <div class="threat-hero threat-hero--premium">
+    <div class="score-dial-wrap">
+      <div class="score-dial score-dial--low" id="overview-score-dial" aria-live="polite">
+        <svg class="score-dial__svg" viewBox="0 0 120 120" aria-hidden="true">
+          <g transform="rotate(-90 60 60)">
+            <circle class="score-dial__track" cx="60" cy="60" r="44" fill="none" stroke-width="7" />
+            <circle class="score-dial__arc" cx="60" cy="60" r="44" fill="none" stroke-width="7" stroke-linecap="round" />
+          </g>
+        </svg>
+        <div class="score-dial__inner">
+          <span class="score-dial__value" id="threat-score-num">—</span>
+          <span class="score-dial__denom">/ 100</span>
+          <span class="score-dial__label">Index</span>
+        </div>
+      </div>
+      <div class="score-dial-meta">
+        <div id="threat-badge-wrap" class="score-dial-meta__badge"></div>
+        <p class="score-dial-meta__caption">Composite of advisories, water levels, rain &amp; wind outlook</p>
+      </div>
+    </div>
+    <div class="threat-copy threat-copy--hero">
+      <p class="snapshot-lead" id="threat-summary">Loading regional snapshot…</p>
+      <div class="snapshot-chips" id="snapshot-chips" aria-label="Key indicators"></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel panel--surface">
+  <h2 class="card__title">At a glance</h2>
+  <p class="panel__hint">The essentials—expand a section below for context and detail.</p>
+  <table class="digest digest--glance" id="glance-table">
+    <tbody id="glance-body"></tbody>
+  </table>
+</section>
+
+<div class="disclosure-stack disclosure-stack--framed" id="metric-details">
+  <details class="insight-panel">
+    <summary class="insight-panel__summary">
+      <span class="insight-panel__title">Rainfall &amp; wind</span>
+      <span class="insight-panel__chev" aria-hidden="true"></span>
+    </summary>
+    <div class="insight-panel__body">
+      <p class="insight-panel__explain">
+        Forecast rain totals and peak gusts help estimate runoff and marine conditions. Values blend short-range model output (Open-Meteo) with what official grids expect (NWS).
+      </p>
+      <table class="digest">
+        <tbody id="detail-weather-body"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="insight-panel">
+    <summary class="insight-panel__summary">
+      <span class="insight-panel__title">Coastal water &amp; seas</span>
+      <span class="insight-panel__chev" aria-hidden="true"></span>
+    </summary>
+    <div class="insight-panel__body">
+      <p class="insight-panel__explain">
+        Tide-gauge height and departure from a recent average hint at surge, setup, or barometric effects. Offshore buoys report combined sea state.
+      </p>
+      <table class="digest">
+        <tbody id="detail-coastal-body"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="insight-panel">
+    <summary class="insight-panel__summary">
+      <span class="insight-panel__title">Rivers &amp; inland water</span>
+      <span class="insight-panel__chev" aria-hidden="true"></span>
+    </summary>
+    <div class="insight-panel__body">
+      <p class="insight-panel__explain">
+        Stream gage height and flow show whether local waterways are elevated—relevant for riverine flooding away from the coast.
+      </p>
+      <table class="digest">
+        <tbody id="detail-rivers-body"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="insight-panel">
+    <summary class="insight-panel__summary">
+      <span class="insight-panel__title">Alerts &amp; forecast emphasis</span>
+      <span class="insight-panel__chev" aria-hidden="true"></span>
+    </summary>
+    <div class="insight-panel__body">
+      <p class="insight-panel__explain">
+        NWS issues watches, warnings, and advisories for your grid point. We also surface how much rain the hourly forecast emphasizes (probability of precipitation).
+      </p>
+      <table class="digest">
+        <tbody id="detail-alerts-body"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="insight-panel">
+    <summary class="insight-panel__summary">
+      <span class="insight-panel__title">Terrain reference</span>
+      <span class="insight-panel__chev" aria-hidden="true"></span>
+    </summary>
+    <div class="insight-panel__body">
+      <p class="insight-panel__explain">
+        Ground elevation at the hub’s reference point is a static geographic cue only—it does not change with the storm. Pair it with surge and rainfall when thinking about compound risk.
+      </p>
+      <table class="digest">
+        <tbody id="detail-terrain-body"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="insight-panel">
+    <summary class="insight-panel__summary">
+      <span class="insight-panel__title">How the index is built</span>
+      <span class="insight-panel__chev" aria-hidden="true"></span>
+    </summary>
+    <div class="insight-panel__body">
+      <p class="insight-panel__explain">
+        The readiness index is a weighted blend of signals from the feeds above. It is a planning aid, not an official evacuation or safety decision. Always follow NWS and your county emergency managers.
+      </p>
+      <p class="disclaimer" id="threat-disclaimer"></p>
+      <h3 class="insight-subhead">What moved the score</h3>
+      <ul class="threat-reasons" id="threat-reasons"></ul>
+      <h3 class="insight-subhead">Contributing factors</h3>
+      <ul class="comp-list" id="threat-components"></ul>
+    </div>
+  </details>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/app.js') }}" type="module"></script>
+{% endblock %}
