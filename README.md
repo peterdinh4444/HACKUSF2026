@@ -2,149 +2,160 @@
 
 ## Hurricane Hub
 
-A comprehensive web application for storm readiness and flood risk assessment in the Tampa Bay region. This Flask-based prototype aggregates data from multiple public APIs to provide real-time weather, water level, and advisory information with an intuitive user interface.
+A Flask-based prototype for storm readiness and flood risk assessment in Tampa Bay. This app combines live weather, water, emergency, and local flood-zone data with address-level home risk summaries, user profiles, and assistant chat.
 
-### Features
+## Key capabilities
 
-- **Storm Readiness Overview**: Real-time threat score dashboard combining weather, water, and advisory data
-- **Home Risk Assessment**: Address-based flood and storm risk evaluation with detailed risk cards
-- **Interactive Heat Map**: Visual representation of regional flood risk across Tampa metro ZIP codes
-- **Regional Data Integration**: Tampa Bay-specific flood and emergency management data
-- **User Authentication**: Secure user accounts for personalized home profiles
-- **API Aggregation**: Unified access to multiple public data sources (NOAA, USGS, NWS, etc.)
+- Real-time threat score dashboard (weather + water + advisories)
+- Address-based home risk assessment with full/compact output
+- Tampa Bay zip lookup / regional model (point & zip, heatmap mode)
+- Saved home profiles with refresh and PDF report export
+- Interactive heat map of Tampa metro zip risk
+- Login/register, profile CRUD, protected user APIs
+- Claude conversational assistant for dashboard/home insight
+- Evacuation route planning (Nominatim + Mapbox fallback)
 
-### Technology Stack
+## Tech stack
 
-- **Backend**: Python Flask
-- **Frontend**: HTML5, CSS3, JavaScript (Vanilla JS)
-- **Data Sources**: NOAA Weather API, USGS Water Data, NWS Advisories, Mapbox Geocoding
-- **Database**: SQLite (user auth and regional data)
-- **Visualization**: Custom SVG dials and interactive maps
+- Python 3.11+ (tested)
+- Flask
+- SQLite (auth + saved homes + Tampa zips)
+- requests, fpdf
+- Frontend: HTML/CSS/Vanilla JS, Mapbox, Leaflet, Chart + SVG dials
 
-### Project Structure
+## Repository structure
 
 ```
 UIBuilder/
-├── app.py                 # Main Flask application
-├── requirements.txt       # Python dependencies
+├── app.py                        # Flask routes, auth, business flows, API endpoints
+├── requirements.txt              # Python dependencies
 ├── data/
-│   └── tampa_metro_zips.csv  # Regional ZIP code data with flood risk metadata
+│   └── tampa_metro_zips.csv      # regional ZIP metadata with coordinates, flood links
 ├── scripts/
-│   ├── build_enriched_zips.py  # Data enrichment script
-│   └── test_endpoints.py       # API testing utilities
+│   ├── build_enriched_zips.py    # build local zip database with local risk fields
+│   └── test_endpoints.py         # smoke API tests
 ├── services/
-│   ├── apis.py            # API aggregation and data fetching
-│   ├── auth_db.py         # User authentication database
-│   ├── geocode.py         # Address geocoding services
-│   ├── home_assessment.py # Home risk assessment logic
-│   ├── regional_tampa.py  # Tampa Bay regional data
-│   └── tampa_db.py        # Regional database operations
+│   ├── apis.py                   # NOAA/NWS/USGS/Mapbox data aggregators + endpoint catalog
+│   ├── auth_db.py                # user table and auth helpers
+│   ├── claude_chat.py            # Claude API assist chat integration
+│   ├── geocode.py                # address geocoding helpers, Mapbox fallback
+│   ├── home_assessment.py        # full/compact risk engine, threat scoring, risk card
+│   ├── regional_tampa.py         # Tampa lookup logic (county, flood zone, outage layers)
+│   └── tampa_db.py               # local zip DB CRUD/search/stats and seeding
 ├── static/
-│   ├── css/style.css      # Application styles
+│   ├── css/style.css
 │   └── js/
-│       ├── app.js         # Main application logic
-│       ├── homes.js       # Home management interface
-│       └── score-ui.js    # Score visualization components
+│       ├── address-autocomplete.js
+│       ├── app.js
+│       ├── assistant-chat.js
+│       ├── dashboard-heatmap.js
+│       ├── home-share-report.js
+│       ├── homes.js
+│       └── score-ui.js
 └── templates/
-    ├── base.html          # Base template
-    ├── index.html         # Overview/dashboard page
-    ├── homes.html         # Home profiles page
-    ├── heatmap.html       # Heat map visualization
-    ├── login.html         # User login
-    └── register.html      # User registration
+    ├── _assistant_chat.html
+    ├── _home_results.html
+    ├── base.html
+    ├── dashboard.html
+    ├── heatmap.html
+    ├── home_snapshot.html
+    ├── homes.html
+    ├── how_scores.html
+    ├── index.html
+    ├── login.html
+    └── register.html
 ```
 
-### Installation
+## Getting started
 
-1. **Clone the repository**:
+1. Clone:
    ```bash
-   git clone <repository-url>
-   cd HACKUSF2026
+   git clone <repo-url>
+   cd HACKUSF2026/UIBuilder
    ```
-
-2. **Set up Python environment**:
+2. Python env
    ```bash
-   cd UIBuilder
    python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   source venv/bin/activate
    pip install -r requirements.txt
    ```
-
-3. **Configure environment variables** (optional):
+3. Optional env vars
    ```bash
-   export SECRET_KEY="your-secret-key-here"
-   export HURRICANE_HUB_SEED_DEMO="1"  # Enables demo user seeding
+   export SECRET_KEY='super-secret'
+   export HURRICANE_HUB_SEED_DEMO='1'  # seeds demo user/demo123 on startup
+   export ANTHROPIC_API_KEY='your-key-here'  # for /api/assistant/chat
    ```
-
-4. **Run the application**:
+4. Run
    ```bash
    python app.py
    ```
+5. Open `http://localhost:5000`
 
-5. **Access the application**:
-   Open http://localhost:5000 in your browser
+## Pages and UI
 
-### Usage
+- `/`               → home dashboard
+- `/dashboard`      → detailed threat dashboard page
+- `/heatmap`        → Tampa metro risk heat map
+- `/homes`          → saved homes management (login required)
+- `/homes/<id>`     → saved home snapshot (login required)
+- `/how-scores`     → methodology docs
+- `/login` `/register` / logout
 
-#### For General Users
-- **Overview Page**: View current storm threat score and regional conditions
-- **Heat Map**: Explore flood risk across Tampa Bay ZIP codes
-- **Home Assessment**: Search for addresses to get personalized risk profiles
+## Main API endpoints (stable)
 
-#### For Registered Users
-- Create an account to save and manage multiple home profiles
-- Access detailed risk assessments for saved addresses
-- Track changes in risk levels over time
+- `GET /api/dashboard` (lat, lon, verbose, include_tampa)
+- `GET /api/endpoints`
+- `GET /api/report` (text report by lat/lon)
+- `GET /api/geocode?q=...`
+- `GET /api/geocode/suggest?q=...`
+- `GET /api/tampa/point?lat=..&lon=..`
+- `GET /api/tampa/hub?lat=..&lon=..`  (dashboard+regional)
+- `GET /api/tampa/lookup?q=address` (home assessment)
+- `GET /api/tampa/zip/<zip>`
+- `GET /api/tampa/zips/search?q=`
+- `GET /api/tampa/zips/stats`
+- `GET /api/heatmap/data` (`simulate` optional mild/big)
 
-### API Endpoints
+Protected endpoints (login required):
+- `GET/POST /api/assessment/home` (compact=1 param/body)
+- `GET /api/assessment/home/pdf` (generates PDF report)
+- `POST /api/profiles` (create profile)
+- `GET /api/profiles` (list profiles)
+- `GET/DELETE /api/profiles/<pid>`
+- `POST /api/profiles/<pid>/refresh` (refresh saved profile assessment)
+- `POST /api/profiles/evac-route` (from_lat/from_lon/destination)
+- `POST /api/profiles/assess` (alias for assessment)
+- `POST /api/assistant/chat` (Claude assist with `page`, `context`, `message`, optional `messages`)
 
-The application provides several REST API endpoints:
+## Data process
 
-- `GET /api/dashboard` - Aggregated weather and threat data
-- `GET /api/endpoints` - List of available data sources
-- `GET /api/geocode` - Address geocoding
-- `GET /api/tampa/point` - Regional data for coordinates
-- `GET /api/tampa/zip/<zip>` - ZIP code specific data
-- `GET /api/heatmap/data` - Heat map data points
+- Local seed of `data/tampa_metro_zips.csv` into sqlite via `seed_from_csv_if_empty()`
+- `scripts/build_enriched_zips.py` enriches csv offline with contextual risk hints
+- `scripts/test_endpoints.py` verifies API path outputs
 
-### Data Sources
+## Security
 
-Hurricane Hub aggregates data from:
-- **NOAA Weather API**: Current conditions and forecasts
-- **USGS Water Services**: Real-time water level data
-- **National Weather Service**: Weather advisories and warnings
-- **Mapbox Geocoding**: Address-to-coordinate conversion
-- **FL511**: Traffic and evacuation route information
-- **County Emergency Management**: Local flood zone data
+- Session-based auth with `SECRET_KEY`
+- `login_required` decorator for profile and assessment endpoints
+- Safe redirect handling via `_safe_internal_next`
 
-### Development
+## Notes
 
-#### Running Tests
-```bash
-cd UIBuilder
-python scripts/test_endpoints.py
-```
+- `api/assistant/chat` requires a valid `ANTHROPIC_API_KEY`, otherwise returns 503.
+- `/api/heatmap/data` can simulate event intensity without real API calls.
+- PDF export uses `fpdf` and assembles a storm risk summary.
 
-#### Data Enrichment
-```bash
-python scripts/build_enriched_zips.py
-```
+## Contributing
 
-#### Code Style
-The project follows Python PEP 8 standards and uses type hints throughout.
+1. Fork
+2. branch/feature
+3. tests + docs
+4. pull request
 
-### Contributing
+## License
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+HACKUSF2026 internal/prototype work for Hack USF 2026.
 
-### License
+## Disclaimer
 
-This project is developed as part of HACKUSF2026. See individual file headers for licensing information.
-
-### Disclaimer
-
-This application is a prototype and should not be used as the sole source for emergency decision-making. Always consult official sources like the National Weather Service, local emergency management, and county flood zone maps for critical safety information.
+Prototype only; not a certified emergency decision system. Verify with local authorities and NWS for real decisions.
