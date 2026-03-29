@@ -1,7 +1,16 @@
 import { renderScoreDial } from "./score-ui.js";
-import { initAssistantDock } from "./assistant-chat.js";
+import { postThreatTierWatch } from "./alert-email-pref.js";
+import {
+  bindTopicAiButton,
+  clearAskAiTopicHistory,
+  refreshTopicSummaryRow,
+  syncTopicAiButtonState,
+} from "./detail-topic-ai.js";
 
 const FETCH_OPTS = { credentials: "same-origin" };
+
+/** Short-lived session cache so revisiting the dashboard reuses SQLite-backed JSON without an extra round trip. */
+const DASH_CACHE_TTL_MS = 45_000;
 
 const DASH_DETAIL_KEYS = ["alerts", "coastal", "weather", "rivers", "terrain", "tds"];
 
@@ -201,6 +210,13 @@ function setThreatHero(threat) {
   const wrap = document.getElementById("threat-badge-wrap");
   renderScoreDial(dial, threat?.score, threat?.tier);
   if (wrap) wrap.innerHTML = tierBadge(threat?.tier);
+  const cap = document.getElementById("dashboard-hero-caption");
+  if (cap) {
+    const low = String(threat?.tier || "").toLowerCase() === "low";
+    cap.textContent = low
+      ? "Green band — no elevated signals in this snapshot from the feeds we track. Still follow NWS and your county when weather is active."
+      : "Planning aid only — always follow NWS and your county.";
+  }
 }
 
 function renderTdsBanner(threat) {
@@ -515,6 +531,7 @@ function renderDetailGauge(topic, data) {
 
 function renderAll(data) {
   lastDashData = data;
+  clearAskAiTopicHistory(document.getElementById("btn-dash-topic-ai"));
   const threat = data.threat || {};
   renderCoords(data.location);
   renderTdsBanner(threat);
@@ -529,17 +546,46 @@ function renderAll(data) {
   setDashUpdated();
   const sel = document.getElementById("dash-detail-select");
   if (sel?.value) renderDetailGauge(sel.value, data);
+  const aiBtn = document.getElementById("btn-dash-topic-ai");
+  const dashCtx = () =>
+    lastDashData ? { dashboard: lastDashData, reference_coordinates: lastDashData.location } : null;
+  syncTopicAiButtonState(aiBtn, () => sel?.value || "", dashCtx);
+  postThreatTierWatch(threat.tier, threat.score);
+}
+
+async function fetchDashboardJson(url) {
+  const key = `hhb-dash:${url}`;
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (raw) {
+      const { t, data } = JSON.parse(raw);
+      if (typeof t === "number" && data && Date.now() - t < DASH_CACHE_TTL_MS) {
+        return data;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  const res = await fetch(url, FETCH_OPTS);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ t: Date.now(), data }));
+  } catch {
+    /* quota */
+  }
+  return data;
 }
 
 async function loadDashboard() {
   try {
-    const res = await fetch("/api/dashboard", FETCH_OPTS);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const data = await fetchDashboardJson("/api/dashboard");
     renderAll(data);
+    return true;
   } catch (e) {
     console.error(e);
     lastDashData = null;
+    clearAskAiTopicHistory(document.getElementById("btn-dash-topic-ai"));
     const low = { score: "—", tier: "low", reasons: [], disclaimer: "" };
     renderTdsBanner({});
     const sel = document.getElementById("dash-detail-select");
@@ -565,15 +611,31 @@ async function loadDashboard() {
     if (grid) grid.innerHTML = "";
     const du = document.getElementById("dash-updated");
     if (du) du.textContent = "Sync failed";
+    return false;
   }
 }
+
+window.addEventListener("hurricanehub-chat-load-dashboard", async (e) => {
+  const done = e.detail?.done;
+  const ok = await loadDashboard();
+  done?.({ ok });
+});
 
 function initDashDetailSelect() {
   const sel = document.getElementById("dash-detail-select");
   const viewport = document.getElementById("dash-detail-viewport");
   const placeholder = document.getElementById("dash-detail-placeholder");
   const exploreCard = document.querySelector(".dash-explore-card");
+  const summaryEl = document.getElementById("dash-detail-topic-summary");
+  const aiBlock = document.getElementById("dash-detail-ai-block");
+  const guestEl = document.getElementById("dash-detail-ai-guest");
+  const loggedEl = document.getElementById("dash-detail-ai-logged");
+  const outEl = document.getElementById("dash-detail-ai-out");
+  const aiBtn = document.getElementById("btn-dash-topic-ai");
   if (!sel || !viewport) return;
+
+  const getDashCtx = () =>
+    lastDashData ? { dashboard: lastDashData, reference_coordinates: lastDashData.location } : null;
 
   const apply = () => {
     const v = sel.value;
@@ -586,22 +648,234 @@ function initDashDetailSelect() {
     if (placeholder) placeholder.hidden = show;
     if (exploreCard) exploreCard.classList.toggle("dash-explore-card--has-topic", show);
     renderDetailGauge(v, lastDashData);
+    const dashLow = String(lastDashData?.threat?.tier || "").toLowerCase() === "low";
+    refreshTopicSummaryRow(v || null, summaryEl, aiBlock, guestEl, loggedEl, outEl, { snapshotLowTier: dashLow });
+    syncTopicAiButtonState(aiBtn, () => sel.value, getDashCtx);
   };
 
   sel.addEventListener("change", apply);
   apply();
+
+  bindTopicAiButton(aiBtn, {
+    page: "dashboard",
+    getTopic: () => sel.value,
+    getContext: getDashCtx,
+    outEl,
+  });
 }
 
 initDashDetailSelect();
 loadDashboard();
 
-initAssistantDock("dashboard", () => {
+window.__hurricaneHubAssistantContext = () => {
   if (!lastDashData) {
     return { note: "Dashboard data is still loading or failed to load — refresh or wait for the chips above to update." };
   }
   return {
-    page: "dashboard",
     reference_coordinates: lastDashData.location,
     dashboard: lastDashData,
   };
-});
+};
+
+const TAMPA_VIEWBOX = { lonMin: -82.9, lonMax: -82.1, latMin: 27.5, latMax: 28.2 };
+
+function inTampaBayArea(lon, lat) {
+  if (lat == null || lon == null || Number.isNaN(lat) || Number.isNaN(lon)) return false;
+  return lon >= TAMPA_VIEWBOX.lonMin && lon <= TAMPA_VIEWBOX.lonMax && lat >= TAMPA_VIEWBOX.latMin && lat <= TAMPA_VIEWBOX.latMax;
+}
+
+const COUNTY_EM_LINKS = [
+  { re: /hillsborough/i, href: "https://www.hillsboroughcounty.org/en/residents/public-safety/emergency-management", label: "County emergency (Hillsborough)" },
+  { re: /pinellas/i, href: "https://pinellas.gov/emergency-management/", label: "County emergency (Pinellas)" },
+  { re: /pasco/i, href: "https://www.pascocountyfl.net/328/Emergency-Management", label: "County emergency (Pasco)" },
+  { re: /hernando/i, href: "https://www.hernandocounty.us/departments/emergency-management", label: "County emergency (Hernando)" },
+  { re: /manatee/i, href: "https://www.mymanatee.org/departments/public-safety", label: "County emergency (Manatee)" },
+  { re: /polk/i, href: "https://www.polkcountyfl.net/emergency-management/", label: "County emergency (Polk)" },
+  { re: /citrus/i, href: "https://www.citruscounty.org/government/departments/public_safety/emergency_management.php", label: "County emergency (Citrus)" },
+  { re: /sarasota/i, href: "https://www.scgov.net/government/public-safety/emergency-services", label: "County emergency (Sarasota)" },
+];
+
+function initLocationAssessModal() {
+  const btn = document.getElementById("btn-assess-my-location");
+  const modal = document.getElementById("location-assess-modal");
+  if (!btn || !modal) return;
+
+  const backdrop = modal.querySelector(".loc-modal__backdrop");
+  const closeBtn = document.getElementById("loc-modal-close");
+  const titleEl = document.getElementById("loc-modal-title");
+  const leadEl = document.getElementById("loc-modal-lead");
+  const tierEl = document.getElementById("loc-modal-tier");
+  const summaryEl = document.getElementById("loc-modal-summary");
+  const bulletsEl = document.getElementById("loc-modal-bullets");
+  const actionsEl = document.getElementById("loc-modal-actions");
+  const hintEl = document.getElementById("loc-modal-hint");
+
+  function closeModal() {
+    modal.hidden = true;
+    modal.setAttribute("aria-hidden", "true");
+    leadEl.classList.remove("loc-modal__lead--err");
+    hintEl.hidden = false;
+    btn.focus();
+  }
+
+  closeBtn?.addEventListener("click", closeModal);
+  backdrop?.addEventListener("click", closeModal);
+  document.addEventListener("hurricanehub-close-overlays", () => {
+    if (!modal.hidden) closeModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.hidden) closeModal();
+  });
+
+  function showError(title, message) {
+    titleEl.textContent = title;
+    leadEl.textContent = message;
+    leadEl.classList.add("loc-modal__lead--err");
+    tierEl.innerHTML = "";
+    if (summaryEl) summaryEl.textContent = "";
+    bulletsEl.innerHTML = "";
+    actionsEl.innerHTML = "";
+    hintEl.hidden = true;
+    modal.hidden = false;
+    modal.setAttribute("aria-hidden", "false");
+    closeBtn?.focus();
+  }
+
+  function showSuccess(data) {
+    const threat = data.threat || {};
+    const loc = data.location || {};
+    const reg = data.tampa_bay_regional || {};
+    const ev = reg.evacuation || {};
+    const lat = loc.latitude;
+    const lon = loc.longitude;
+
+    titleEl.textContent = "Your location — next steps";
+    leadEl.classList.remove("loc-modal__lead--err");
+
+    let lead = "";
+    if (lat != null && lon != null) {
+      lead = `Pin ≈ ${Number(lat).toFixed(3)}°, ${Number(lon).toFixed(3)}°.`;
+    }
+    if (!inTampaBayArea(lon, lat)) {
+      lead += " Outside the Tampa Bay demo box — still follow your local NWS office and county.";
+    }
+    if (ev.evac_level != null) lead += ` Evacuation data: level ${ev.evac_level}.`;
+    else if (ev.evac_zone != null) lead += ` Evacuation zone (state layer): ${ev.evac_zone}.`;
+    else if (ev.county) lead += ` County from state layer: ${ev.county}.`;
+    leadEl.textContent = lead.trim() || "Snapshot for your position.";
+
+    const score = threat.score != null ? threat.score : "—";
+    tierEl.innerHTML = `${tierBadge(threat.tier)}<span class="loc-modal__score-line">Risk index <strong>${escapeHtml(String(score))}</strong> / 100</span>`;
+
+    if (summaryEl) summaryEl.textContent = decisionHeadline(threat);
+
+    const evSource = typeof ev.source === "string" ? ev.source : "";
+
+    const bullets = decisionBullets(threat, data);
+    bulletsEl.innerHTML = bullets.map((b) => `<li>${escapeHtml(b)}</li>`).join("");
+
+    const steps = [];
+    steps.push({ href: "https://www.weather.gov/tbw/", label: "Open NWS Tampa Bay", ext: true, primary: true });
+    steps.push({ href: "https://www.fl511.com/", label: "Open FL511 (traffic & roads)", ext: true, primary: false });
+
+    const county = typeof ev.county === "string" ? ev.county : "";
+    let matchedCounty = false;
+    if (evSource.toLowerCase().includes("hillsborough")) {
+      const hb = COUNTY_EM_LINKS[0];
+      steps.push({ href: hb.href, label: hb.label, ext: true, primary: false });
+      matchedCounty = true;
+    } else {
+      for (const row of COUNTY_EM_LINKS) {
+        if (county && row.re.test(county)) {
+          steps.push({ href: row.href, label: row.label, ext: true, primary: false });
+          matchedCounty = true;
+          break;
+        }
+      }
+    }
+    if (county && !matchedCounty) {
+      steps.push({
+        href: "https://www.floridadisaster.org/planprepare/evacuation-zones/",
+        label: "Florida evacuation zones (lookup)",
+        ext: true,
+        primary: false,
+      });
+    }
+    steps.push({ href: "https://www.floridadisaster.org/planprepare/", label: "Florida Disaster — plan & prepare", ext: true, primary: false });
+    steps.push({ href: "/homes", label: "Home risk — full address check", ext: false, primary: false });
+
+    if (document.body.getAttribute("data-logged-in") === "1") {
+      steps.push({ action: "guide", label: "Open Ask about this page (guide)", primary: true });
+    }
+
+    actionsEl.innerHTML = "";
+    for (const x of steps) {
+      if (x.action === "guide") {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = `btn btn--sm ${x.primary ? "btn--primary" : ""}`.trim();
+        b.textContent = x.label;
+        b.addEventListener("click", () => {
+          document.getElementById("assistant-toggle")?.click();
+          closeModal();
+        });
+        actionsEl.appendChild(b);
+        continue;
+      }
+      const a = document.createElement("a");
+      a.className = `btn btn--sm ${x.primary ? "btn--primary" : "btn--ghost"}`.trim();
+      a.href = x.href;
+      a.textContent = x.label;
+      if (x.ext) {
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+      }
+      actionsEl.appendChild(a);
+    }
+
+    hintEl.hidden = false;
+    modal.hidden = false;
+    modal.setAttribute("aria-hidden", "false");
+    closeBtn?.focus();
+  }
+
+  btn.addEventListener("click", () => {
+    if (!navigator.geolocation) {
+      showError("Location not available", "This browser doesn’t support geolocation, or the page isn’t on a secure origin.");
+      return;
+    }
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = "Locating…";
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        try {
+          const url = `/api/dashboard?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&include_tampa=1`;
+          const data = await fetchDashboardJson(url);
+          renderAll(data);
+          showSuccess(data);
+        } catch (e) {
+          showError("Couldn’t load snapshot", e?.message || String(e));
+        } finally {
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      },
+      (geoErr) => {
+        btn.disabled = false;
+        btn.textContent = label;
+        const byCode = {
+          1: "Permission denied — allow location for this site in your browser, or use Home risk with an address.",
+          2: "Position unavailable.",
+          3: "Location request timed out — try again outdoors or with Wi‑Fi location on.",
+        };
+        showError("Location needed", byCode[geoErr.code] || geoErr.message || "Could not read your position.");
+      },
+      { enableHighAccuracy: true, maximumAge: 120000, timeout: 20000 }
+    );
+  });
+}
+
+initLocationAssessModal();

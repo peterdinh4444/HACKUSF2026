@@ -10,14 +10,49 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
   {% block head_extra %}{% endblock %}
 </head>
-<body>
+<body data-logged-in="{{ '1' if current_user else '0' }}">
+  <div class="page-bg-waves" aria-hidden="true">
+    <svg class="page-bg-waves__svg page-bg-waves__svg--back" viewBox="0 0 1440 320" preserveAspectRatio="none" focusable="false">
+      <path
+        fill="currentColor"
+        d="M0,192L60,197.3C120,203,240,213,360,197.3C480,181,600,139,720,138.7C840,139,960,181,1080,197.3C1200,213,1320,203,1380,197.3L1440,192L1440,320L1380,320C1320,320,1200,320,1080,320C960,320,840,320,720,320C600,320,480,320,360,320C240,320,120,320,60,320L0,320Z"
+      />
+    </svg>
+    <svg class="page-bg-waves__svg page-bg-waves__svg--mid" viewBox="0 0 1440 320" preserveAspectRatio="none" focusable="false">
+      <path
+        fill="currentColor"
+        d="M0,224L80,213.3C160,203,320,181,480,181.3C640,181,800,203,960,208C1120,213,1280,203,1360,197.3L1440,192L1440,320L1360,320C1280,320,1120,320,960,320C800,320,640,320,480,320C320,320,160,320,80,320L0,320Z"
+      />
+    </svg>
+    <svg class="page-bg-waves__svg page-bg-waves__svg--front" viewBox="0 0 1440 320" preserveAspectRatio="none" focusable="false">
+      <path
+        fill="currentColor"
+        d="M0,256L96,245.3C192,235,384,213,576,218.7C768,224,960,256,1152,261.3C1344,267,1392,248,1440,242.7L1440,320L0,320Z"
+      />
+    </svg>
+  </div>
   <header class="nav">
     <div class="shell nav__inner">
-      <a class="nav__logo" href="{{ url_for('index') }}">Hurricane Hub</a>
+      <a class="nav__logo" href="{{ url_for('index') }}">
+        <svg class="nav__logo-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+          <g fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.2 6.8a5.2 5.2 0 0 0-4.4-.2 5.2 5.2 0 0 0-3.1 6.7" />
+            <path d="M9.8 17.2a5.2 5.2 0 0 0 4.4.2 5.2 5.2 0 0 0 3.1-6.7" />
+            <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+          </g>
+        </svg>
+        <span class="nav__logo-text">Hurricane Hub</span>
+      </a>
       <nav class="nav__links" aria-label="Primary">
-        <a class="nav__link{% if request.endpoint == 'dashboard_page' %} nav__link--active{% endif %}" href="{{ url_for('dashboard_page') }}">Dashboard</a>
-        <a class="nav__link{% if request.endpoint in ('homes_page', 'home_snapshot_page') %} nav__link--active{% endif %}" href="{{ url_for('homes_page') }}">Home risk</a>
-        <a class="nav__link{% if request.endpoint == 'how_scores_page' %} nav__link--active{% endif %}" href="{{ url_for('how_scores_page') }}">How scores work</a>
+        <a class="nav__link{% if request.endpoint == 'dashboard_page' %} nav__link--active{% endif %}" href="{{ url_for('dashboard_page') }}" title="Readiness dashboard">Dashboard</a>
+        <a class="nav__link{% if request.endpoint == 'evacuation_page' %} nav__link--active{% endif %}" href="{{ url_for('evacuation_page') }}" title="Evacuation zones &amp; traffic near your pin">Evac</a>
+        <a class="nav__link{% if request.endpoint in ('homes_page', 'home_snapshot_page') %} nav__link--active{% endif %}" href="{{ url_for('homes_page') }}" title="Home risk — saved addresses">Homes</a>
+        {% if current_user %}
+        <a class="nav__link{% if request.endpoint == 'notifications_page' %} nav__link--active{% endif %}" href="{{ url_for('notifications_page') }}" title="Email alerts and news from the database">Alerts &amp; news</a>
+        {% endif %}
+        <a class="nav__link{% if request.endpoint == 'faq_page' %} nav__link--active{% endif %}" href="{{ url_for('faq_page') }}">FAQ</a>
+        <a class="nav__link{% if request.endpoint == 'data_api_page' %} nav__link--active{% endif %}" href="{{ url_for('data_api_page') }}" title="Public JSON endpoints">API</a>
+        <a class="nav__link{% if request.endpoint == 'how_scores_page' %} nav__link--active{% endif %}" href="{{ url_for('how_scores_page') }}" title="How the risk score works">Scores</a>
       </nav>
       <div class="nav__auth">
         {% if current_user %}
@@ -46,7 +81,7 @@
     {% block content %}{% endblock %}
   </main>
 
-  {% if current_user and assistant_chat_page %}
+  {% if current_user %}
   {% include "_assistant_chat.html" %}
   {% endif %}
 
@@ -54,5 +89,8 @@
     <p>Public-data prototype for Tampa Bay storm readiness. Not official guidance — use <a href="https://www.weather.gov/tbw/" rel="noopener">NWS Tampa Bay</a> and county emergency managers.</p>
   </footer>
   {% block scripts %}{% endblock %}
+  {% if current_user %}
+  <script type="module" src="{{ url_for('static', filename='js/assistant-bootstrap.js') }}"></script>
+  {% endif %}
 </body>
 </html>

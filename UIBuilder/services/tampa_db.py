@@ -86,6 +86,39 @@ def init_db() -> None:
             conn.execute("ALTER TABLE home_profiles ADD COLUMN user_id INTEGER")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_profiles_zip ON home_profiles(zip)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_profiles_user ON home_profiles(user_id)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS news_feed_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                external_key TEXT NOT NULL,
+                title TEXT,
+                summary TEXT,
+                url TEXT,
+                published_at TEXT,
+                fetched_at TEXT NOT NULL,
+                keywords TEXT,
+                raw_json TEXT,
+                UNIQUE(source, external_key)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_news_feed_pub ON news_feed_items(published_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_news_feed_src ON news_feed_items(source)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS geo_bundle_cache (
+                grid_lat REAL NOT NULL,
+                grid_lon REAL NOT NULL,
+                verbose_int INTEGER NOT NULL DEFAULT 0,
+                dashboard_json TEXT NOT NULL,
+                regional_json TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (grid_lat, grid_lon, verbose_int)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_geo_bundle_fetched ON geo_bundle_cache(fetched_at)")
         conn.commit()
     finally:
         conn.close()
@@ -174,23 +207,14 @@ def stats() -> dict[str, Any]:
         conn.close()
 
 
-def get_all_zips() -> list[dict[str, Any]]:
-    seed_from_csv_if_empty()
-    conn = _connect()
-    try:
-        cur = conn.execute("SELECT * FROM zip_codes ORDER BY zip")
-        return [dict(r) for r in cur.fetchall()]
-    finally:
-        conn.close()
-
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def list_home_profiles(user_id: int) -> list[dict[str, Any]]:
+def list_home_profiles(user_id: int, *, skip_zip_seed: bool = False) -> list[dict[str, Any]]:
     init_db()
-    seed_from_csv_if_empty()
+    if not skip_zip_seed:
+        seed_from_csv_if_empty()
     conn = _connect()
     try:
         cur = conn.execute(
@@ -270,5 +294,213 @@ def delete_home_profile(pid: int, user_id: int) -> bool:
         cur = conn.execute("DELETE FROM home_profiles WHERE id = ? AND user_id = ?", (pid, user_id))
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def geo_bundle_cache_fetch_row(grid_lat: float, grid_lon: float, verbose_int: int) -> dict[str, Any] | None:
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            """
+            SELECT dashboard_json, regional_json, fetched_at
+            FROM geo_bundle_cache
+            WHERE grid_lat = ? AND grid_lon = ? AND verbose_int = ?
+            """,
+            (grid_lat, grid_lon, verbose_int),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "dashboard_json": row["dashboard_json"],
+            "regional_json": row["regional_json"],
+            "fetched_at": row["fetched_at"],
+        }
+    finally:
+        conn.close()
+
+
+def geo_bundle_cache_upsert(
+    grid_lat: float,
+    grid_lon: float,
+    verbose_int: int,
+    dashboard_obj: dict[str, Any],
+    regional_obj: dict[str, Any],
+    fetched_at: str | None = None,
+) -> None:
+    init_db()
+    ts = fetched_at or _utc_now()
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO geo_bundle_cache (grid_lat, grid_lon, verbose_int, dashboard_json, regional_json, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(grid_lat, grid_lon, verbose_int) DO UPDATE SET
+                dashboard_json = excluded.dashboard_json,
+                regional_json = excluded.regional_json,
+                fetched_at = excluded.fetched_at
+            """,
+            (
+                grid_lat,
+                grid_lon,
+                verbose_int,
+                json.dumps(dashboard_obj, default=str),
+                json.dumps(regional_obj, default=str),
+                ts,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_news_feed_items(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Upsert normalized news rows. Each item: source, external_key, title?, summary?, url?,
+    published_at?, keywords (list[str] | str JSON), raw_json (dict | str | None).
+    """
+    init_db()
+    if not items:
+        return {"upserted": 0, "skipped": 0}
+    conn = _connect()
+    now = _utc_now()
+    upserted = 0
+    skipped = 0
+    sql = """
+        INSERT INTO news_feed_items (
+            source, external_key, title, summary, url, published_at, fetched_at, keywords, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, external_key) DO UPDATE SET
+            title = excluded.title,
+            summary = excluded.summary,
+            url = excluded.url,
+            published_at = excluded.published_at,
+            fetched_at = excluded.fetched_at,
+            keywords = excluded.keywords,
+            raw_json = excluded.raw_json
+    """
+    try:
+        for it in items:
+            src = (it.get("source") or "").strip()
+            ek = (it.get("external_key") or "").strip()
+            if not src or not ek:
+                skipped += 1
+                continue
+            kw = it.get("keywords")
+            if isinstance(kw, list):
+                kw_s = json.dumps(kw)
+            elif isinstance(kw, str):
+                kw_s = kw
+            else:
+                kw_s = None
+            raw = it.get("raw_json")
+            if isinstance(raw, dict):
+                raw_s = json.dumps(raw)
+            elif raw is None:
+                raw_s = None
+            else:
+                raw_s = str(raw)
+            conn.execute(
+                sql,
+                (
+                    src,
+                    ek,
+                    (it.get("title") or None),
+                    (it.get("summary") or None),
+                    (it.get("url") or None),
+                    (it.get("published_at") or None),
+                    now,
+                    kw_s,
+                    raw_s,
+                ),
+            )
+            upserted += 1
+        conn.commit()
+        return {"upserted": upserted, "skipped": skipped}
+    finally:
+        conn.close()
+
+
+def list_news_feed_items(
+    limit: int = 50,
+    source: str | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    init_db()
+    lim = max(1, min(int(limit), 200))
+    off = max(0, int(offset))
+    conn = _connect()
+    try:
+        if source and source.strip():
+            cur = conn.execute(
+                """
+                SELECT id, source, external_key, title, summary, url, published_at, fetched_at, keywords, raw_json
+                FROM news_feed_items
+                WHERE source = ?
+                ORDER BY published_at IS NULL, published_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (source.strip(), lim, off),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT id, source, external_key, title, summary, url, published_at, fetched_at, keywords, raw_json
+                FROM news_feed_items
+                ORDER BY published_at IS NULL, published_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (lim, off),
+            )
+        rows = []
+        for r in cur.fetchall():
+            d = dict(r)
+            if d.get("keywords"):
+                try:
+                    d["keywords"] = json.loads(d["keywords"])
+                except json.JSONDecodeError:
+                    pass
+            if d.get("raw_json"):
+                try:
+                    d["raw_json"] = json.loads(d["raw_json"])
+                except json.JSONDecodeError:
+                    pass
+            rows.append(d)
+        return rows
+    finally:
+        conn.close()
+
+
+def news_feed_stats() -> dict[str, Any]:
+    init_db()
+    conn = _connect()
+    try:
+        total = conn.execute("SELECT COUNT(*) AS c FROM news_feed_items").fetchone()["c"]
+        by = conn.execute(
+            "SELECT source, COUNT(*) AS n FROM news_feed_items GROUP BY source ORDER BY n DESC"
+        ).fetchall()
+        return {"total": total, "by_source": [dict(r) for r in by]}
+    finally:
+        conn.close()
+
+
+def meta_get_value(key: str) -> str | None:
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT v FROM meta WHERE k = ?", (key,)).fetchone()
+        return str(row["v"]) if row and row["v"] is not None else None
+    finally:
+        conn.close()
+
+
+def meta_set_value(key: str, value: str) -> None:
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)", (key, value))
+        conn.commit()
     finally:
         conn.close()

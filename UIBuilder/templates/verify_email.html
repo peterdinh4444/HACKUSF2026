@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Verify email{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <h1 class="page-title">{% if session.get('pending_verify_reason') == 'signup' %}Verify your email{% else %}Check your email{% endif %}</h1>
+  {% if session.get('pending_verify_reason') == 'signup' %}
+  <p class="lede">We sent a 6-digit code to <strong>{{ email_mask }}</strong>. Enter it below to <strong>finish signing up</strong> — your account stays inactive until this step is done (or you cancel below).</p>
+  {% else %}
+  <p class="lede">We sent a 6-digit code to <strong>{{ email_mask }}</strong>. Enter it below to finish signing in — the rest of the app stays locked until this step is done (or you cancel below).</p>
+  {% endif %}
+  <form id="verify-email-form" class="stack-form" method="post" action="{{ url_for('verify_email') }}">
+    <label class="field">
+      <span class="field__label">6-digit code</span>
+      <input
+        id="verify-email-code"
+        class="field__input"
+        type="text"
+        name="code"
+        inputmode="numeric"
+        pattern="[0-9]{6}"
+        maxlength="6"
+        minlength="6"
+        autocomplete="one-time-code"
+        required
+        aria-describedby="verify-code-hint"
+      />
+    </label>
+    <p id="verify-code-hint" class="muted verify-code-hint">Enter all 6 numbers from your email to continue.</p>
+    <button type="submit" id="verify-email-submit" class="btn btn--primary btn--block" name="action" value="verify">Verify and continue</button>
+  </form>
+  <form class="stack-form" method="post" action="{{ url_for('verify_email') }}" style="margin-top: 0.75rem;">
+    <button type="submit" class="btn btn--ghost btn--block btn--sm" name="action" value="resend">Resend code</button>
+  </form>
+  <p class="auth-foot"><a href="{{ url_for('login', abandon_verify='1') }}">Cancel verification and return to log in</a></p>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/verify-email-form.js') }}" defer></script>
+{% endblock %}

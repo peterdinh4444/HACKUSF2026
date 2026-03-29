@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% set assistant_chat_page = "dashboard" %}
 {% block title %}Dashboard{% endblock %}
 {% block main_class %} main--dash{% endblock %}
 {% block content %}
@@ -8,14 +7,37 @@
     <div class="dash-header__lead">
       <p class="dash-kicker">Tampa Bay · live public data</p>
       <h1 class="dash-title">Readiness dashboard</h1>
-      <p class="dash-lede">One glance at your risk score, then pick a topic below if you want more detail.</p>
+      <p class="dash-lede">One glance at your risk score, then pick a topic below if you want more detail. <strong>Sign in</strong> to unlock <strong>Ask AI</strong> on each topic and the floating guide for live analysis.</p>
     </div>
-    <div class="dash-header__meta" aria-label="Snapshot metadata">
+    <div class="dash-header__meta dash-header__meta--with-loc" aria-label="Snapshot metadata">
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('evacuation_page') }}" title="Zones, traffic near pin, checklist">Evacuation &amp; traffic</a>
+      <button type="button" class="btn btn--sm btn--primary" id="btn-assess-my-location" aria-haspopup="dialog" aria-controls="location-assess-modal">
+        Assess my location
+      </button>
       <span class="dash-chip" id="coords-display" aria-live="polite">—° , —°</span>
       <span class="dash-chip dash-chip--muted" id="dash-updated" aria-live="polite">Syncing…</span>
     </div>
   </header>
 
+  <div id="location-assess-modal" class="loc-modal" hidden aria-hidden="true">
+    <div class="loc-modal__backdrop" tabindex="-1"></div>
+    <div class="loc-modal__card card" role="dialog" aria-modal="true" aria-labelledby="loc-modal-title">
+      <div class="loc-modal__head">
+        <h2 class="loc-modal__title" id="loc-modal-title">Your location</h2>
+        <button type="button" class="btn btn--sm btn--ghost" id="loc-modal-close" aria-label="Close">Close</button>
+      </div>
+      <p class="loc-modal__lead muted" id="loc-modal-lead"></p>
+      <div class="loc-modal__tier" id="loc-modal-tier"></div>
+      <p class="loc-modal__summary" id="loc-modal-summary"></p>
+      <ul class="loc-modal__bullets" id="loc-modal-bullets"></ul>
+      <p class="loc-modal__hint muted" id="loc-modal-hint">The dashboard behind this dialog is updated to this pin. Use the buttons for official next steps.</p>
+      <div class="loc-modal__actions" id="loc-modal-actions"></div>
+    </div>
+  </div>
+
+  {% include '_guest_ai_nudge.html' %}
+
+  <div class="dash-focus-sheet">
   <section class="dash-hero" aria-labelledby="dash-summary-heading">
     <div class="dash-hero__index">
       <div class="score-dial-wrap">
@@ -34,7 +56,7 @@
         </div>
         <div class="score-dial-meta dash-hero__meta">
           <div id="threat-badge-wrap" class="score-dial-meta__badge"></div>
-          <p class="score-dial-meta__caption dash-hero__caption">Planning aid only — always follow NWS and your county.</p>
+          <p class="score-dial-meta__caption dash-hero__caption" id="dashboard-hero-caption">Planning aid only — always follow NWS and your county.</p>
         </div>
       </div>
     </div>
@@ -46,18 +68,19 @@
     </div>
   </section>
 
-  <section class="dash-section" aria-labelledby="dash-metrics-title">
-    <div class="dash-section__head">
+  <section class="dash-section dash-section--in-focus" aria-labelledby="dash-metrics-title">
+    <div class="dash-section__head dash-section__head--compact">
       <h2 class="dash-section__title" id="dash-metrics-title">At a glance</h2>
-      <p class="dash-section__hint">Four quick checks — tap a topic under “Learn more” for tables.</p>
+      <p class="dash-section__hint">Four quick checks — open a topic below for detail.</p>
     </div>
     <div class="dash-metrics" id="priority-grid" role="list"></div>
   </section>
+  </div>
 
-  <section class="dash-section dash-section--explore" aria-labelledby="dash-explore-title">
+  <section class="dash-section dash-section--explore dash-explore-below" aria-labelledby="dash-explore-title">
     <div class="dash-section__head">
       <h2 class="dash-section__title" id="dash-explore-title">Learn more</h2>
-      <p class="dash-section__hint">Choose one topic. We’ll show only that section so the page stays easy to read. For the full summation formula (technical), see <a href="{{ url_for('how_scores_page') }}">How scores work</a>.</p>
+      <p class="dash-section__hint">One topic at a time. Signed in? Use <strong>Ask AI</strong> for a short read of that topic. <a href="{{ url_for('faq_page') }}">FAQ</a> · <a href="{{ url_for('how_scores_page') }}">How scores work</a>.</p>
     </div>
     <div class="dash-explore-card">
       <label class="dash-select-label" for="dash-detail-select">Show me…</label>
@@ -70,6 +93,20 @@
         <option value="terrain">Ground height at this spot</option>
         <option value="tds">How your risk score works</option>
       </select>
+      <p class="dash-detail-topic-summary muted" id="dash-detail-topic-summary" hidden></p>
+      <div class="dash-detail-ai-block" id="dash-detail-ai-block" hidden>
+        <p class="muted dash-detail-ai-guest" id="dash-detail-ai-guest" hidden>
+          <strong>Sign in</strong> for <strong>Ask AI</strong> — a short, plain-language read of <em>this</em> topic using your live snapshot.
+          <a href="{{ url_for('login', next=request.path) }}">Log in</a> or <a href="{{ url_for('register') }}">sign up</a> (free). The floating guide answers follow-ups when you’re signed in.
+        </p>
+        <div class="dash-detail-ai-logged" id="dash-detail-ai-logged" hidden>
+          <button type="button" class="btn btn--sm btn--ghost btn--ask-ai" id="btn-dash-topic-ai" aria-label="Ask AI for a short summary of this topic">
+            <span class="btn-ask-ai__sparkle" aria-hidden="true">✨</span>
+            Ask AI
+          </button>
+        </div>
+        <div class="dash-detail-ai-out" id="dash-detail-ai-out" hidden aria-live="polite"></div>
+      </div>
       <p class="dash-detail-placeholder muted" id="dash-detail-placeholder">↑ Select a topic to see details.</p>
       <div id="dash-detail-viewport" class="dash-detail-viewport" hidden>
         <div id="dash-detail-gauge" class="dash-detail-gauge" hidden aria-live="polite"></div>
@@ -143,7 +180,6 @@
       </div>
     </div>
   </section>
-
 </div>
 {% endblock %}
 {% block scripts %}

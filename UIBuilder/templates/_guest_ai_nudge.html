@@ -1,0 +1,13 @@
+{# Shown on key pages when logged out — encourages sign-in for Ask AI + guide #}
+{% if not current_user %}
+<aside class="guest-ai-nudge card" aria-label="Sign in for AI features">
+  <p class="guest-ai-nudge__text">
+    <span class="guest-ai-nudge__badge" aria-hidden="true">✨</span>
+    <strong>AI guide &amp; Ask AI</strong> — Sign in for plain-language summaries of your live dashboard and topics, evacuation context, and the floating guide. Not official advice.
+    <span class="guest-ai-nudge__actions">
+      <a class="btn btn--sm btn--primary" href="{{ url_for('login', next=request.path) }}">Log in</a>
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('register') }}">Sign up</a>
+    </span>
+  </p>
+</aside>
+{% endif %}

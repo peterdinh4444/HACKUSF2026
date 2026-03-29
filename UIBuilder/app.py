@@ -5,17 +5,14 @@ from __future__ import annotations
 
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
+import re
+import time
 from pathlib import Path
 from functools import wraps
-from io import BytesIO
-from datetime import datetime
-import math
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from flask import (
     Flask,
-    Response,
     flash,
     jsonify,
     redirect,
@@ -24,7 +21,6 @@ from flask import (
     session,
     url_for,
 )
-from fpdf import FPDF
 
 from services.apis import (
     DEFAULT_LAT,
@@ -35,7 +31,28 @@ from services.apis import (
     mapbox_forward_geocode,
     plan_evac_drive,
 )
-from services.auth_db import create_user, get_user_by_id, init_auth_db, verify_login
+from services.auth_db import (
+    create_email_challenge,
+    create_user,
+    get_user_by_id,
+    init_auth_db,
+    mint_user_api_key,
+    resolve_user_from_api_key,
+    set_user_alert_email_opt_in,
+    set_user_evacuation_alert_opt_in,
+    user_has_api_key,
+    user_needs_email_verification,
+    verify_email_challenge,
+    verify_login,
+)
+from services.severity_notify import process_severity_change
+from services.smtp_mail import (
+    send_evacuation_zone_sample_email,
+    send_login_verification_code,
+    send_notification_preferences_confirmation_email,
+    smtp_configured,
+)
+from services.geo_bundle_cache import get_or_build_dashboard_regional_pair
 from services.home_assessment import (
     assess_address,
     assess_coordinates,
@@ -43,13 +60,19 @@ from services.home_assessment import (
     compact_home_assessment,
 )
 from services.regional_tampa import regional_lookup
-from services.claude_chat import call_claude
+from services.chat_sanitize import sanitize_chat_text
+from services.report_sanitize import strip_internal_api_refs
+from services.claude_chat import call_claude, call_claude_news_brief, call_claude_topic_brief
+from services.news_ingest import run_full_ingest
+from services.news_refresh import force_news_refresh_async, request_news_refresh_if_stale
 from services.tampa_db import (
     delete_home_profile,
-    get_all_zips,
     get_by_zip,
     get_home_profile,
     list_home_profiles,
+    list_news_feed_items,
+    meta_get_value,
+    news_feed_stats,
     save_home_profile,
     search_city,
     seed_from_csv_if_empty,
@@ -85,6 +108,18 @@ def _session_user_id() -> int | None:
         return None
 
 
+def _mask_email(email: str) -> str:
+    e = (email or "").strip()
+    if "@" not in e:
+        return "your email"
+    local, _, domain = e.partition("@")
+    if len(local) <= 1:
+        return f"***@{domain}"
+    if len(local) <= 3:
+        return f"{local[0]}***@{domain}"
+    return f"{local[0]}***{local[-1]}@{domain}"
+
+
 def _safe_internal_next(url: str) -> str | None:
     raw = (url or "").strip()
     if not raw or "\n" in raw or "\r" in raw:
@@ -103,6 +138,42 @@ def _safe_internal_next(url: str) -> str | None:
     return None
 
 
+def _news_ingest_allowed() -> bool:
+    """POST /api/news/ingest — require secret if set, else localhost only."""
+    secret = (os.environ.get("NEWS_INGEST_SECRET") or "").strip()
+    if secret:
+        return request.headers.get("X-News-Ingest-Secret") == secret
+    addr = (request.remote_addr or "").strip()
+    if addr in ("127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"):
+        return True
+    return False
+
+
+def _request_api_key_raw() -> str:
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    for hdr in ("X-API-Key", "X-Hurricane-Hub-Key"):
+        v = (request.headers.get(hdr) or "").strip()
+        if v:
+            return v
+    return (request.args.get("api_key") or "").strip()
+
+
+def _filter_profiles_by_house_name(profiles: list[dict], house_name: str) -> list[dict]:
+    hn = (house_name or "").strip().lower()
+    if not hn:
+        return profiles
+    exact = [p for p in profiles if (p.get("nickname") or "").strip().lower() == hn]
+    if exact:
+        return exact
+    return [
+        p
+        for p in profiles
+        if hn in (p.get("nickname") or "").lower() or hn in (p.get("address_line") or "").lower()
+    ]
+
+
 def _normalize_assistant_prior_messages(raw) -> list[dict[str, str]]:
     """Keep only a valid u→a→u→a prefix ending with assistant (completed turns)."""
     if not isinstance(raw, list):
@@ -115,11 +186,9 @@ def _normalize_assistant_prior_messages(raw) -> list[dict[str, str]]:
         content = item.get("content")
         if role not in ("user", "assistant") or not isinstance(content, str):
             continue
-        c = content.strip()
+        c = sanitize_chat_text(content, max_len=12000)
         if not c:
             continue
-        if len(c) > 12000:
-            c = c[:12000] + "…"
         cleaned.append({"role": role, "content": c})
     validated: list[dict[str, str]] = []
     for i, m in enumerate(cleaned):
@@ -132,198 +201,115 @@ def _normalize_assistant_prior_messages(raw) -> list[dict[str, str]]:
     return validated
 
 
-def _fpdf_safe(s: str) -> str:
-    """PyFPDF 1.x encodes page text as Latin-1 internally; drop unsupported code points."""
-    return s.encode("latin-1", errors="replace").decode("latin-1")
+_TB_REGION_TERMS = (
+    "hillsborough county",
+    "pinellas county",
+    "pasco county",
+    "hernando county",
+    "polk county",
+    "manatee county",
+    "tampa bay",
+    "city of tampa",
+    "st. petersburg",
+    "st petersburg",
+    "stpete",
+    "clearwater",
+    "brandon",
+    "lakeland",
+    "sarasota",
+    "temple terrace",
+    "plant city",
+    "riverview",
+    "brooksville",
+    "hillsborough",
+    "pinellas",
+    "pasco",
+    "hernando",
+)
+
+_PLACE_HINT_SKIP = frozenset(
+    {
+        "florida",
+        "county",
+        "avenue",
+        "street",
+        "st",
+        "road",
+        "drive",
+        "lane",
+        "boulevard",
+        "blvd",
+        "usa",
+        "apt",
+        "unit",
+    }
+)
 
 
-def _pdf_text(value: object) -> str:
-    if value is None:
-        return "-"
-    if isinstance(value, bool):
-        return "Yes" if value else "No"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return str(value)
-
-
-def _format_coord(value: object) -> str:
-    if isinstance(value, (int, float)):
-        return f"{value:.5f}"
-    return _pdf_text(value)
-
-
-def _render_assessment_pdf(assessment: dict) -> bytes:
-    geo = assessment.get("geocode") or {}
-    risk = assessment.get("risk_card") or {}
-    dash = assessment.get("dashboard") or {}
-    zip_info = assessment.get("zip_database_match") or {}
-
-    address = _pdf_text(geo.get("display_name") or assessment.get("address") or "Selected location")
-    score = _pdf_text(risk.get("threat_score") or dash.get("threat", {}).get("score"))
-    tier = _pdf_text(risk.get("threat_tier") or dash.get("threat", {}).get("tier"))
-    evacuation = _pdf_text(risk.get("evacuation_level"))
-    county_url = _pdf_text(zip_info.get("county_emergency_url"))
-    power_polygons = _pdf_text(risk.get("power_outage_polygons_in_bbox"))
-    fl511_hits = _pdf_text(risk.get("fl511_incident_layers_total"))
-    matched_zip = _pdf_text(assessment.get("matched_zip") or zip_info.get("zip") or zip_info.get("zip_code"))
-    city = _pdf_text(zip_info.get("city"))
-    county = _pdf_text(zip_info.get("county"))
-
-    reasons = risk.get("threat_reasons") or dash.get("threat", {}).get("reasons") or []
-    if reasons:
-        recommendations = [f"{r}" for r in reasons[:5]]
+def _news_haystack(item: dict) -> str:
+    title = str(item.get("title") or "")
+    sm = str(item.get("summary") or "")
+    kw = item.get("keywords")
+    if isinstance(kw, list):
+        kws = " ".join(str(x) for x in kw)
+    elif isinstance(kw, str):
+        kws = kw
     else:
-        recommendations = ["No strong signals in this run."]
+        kws = ""
+    return f"{title} {sm} {kws}".lower()
 
-    generated_at = datetime.now().strftime("%B %d, %Y at %I:%M %p")
 
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(False)
+def _reader_location_from_profiles(profiles: list[dict]) -> dict[str, object]:
+    zips: list[str] = []
+    hints: list[str] = []
+    for p in profiles:
+        z = str(p.get("zip") or "").strip()
+        if z.isdigit() and len(z) == 5:
+            zips.append(z)
+        addr = str(p.get("address_line") or "")
+        for part in re.split(r"[\d,]+", addr.lower()):
+            t = part.strip()
+            if len(t) >= 4 and t not in _PLACE_HINT_SKIP:
+                hints.append(t)
+    return {
+        "zips": list(dict.fromkeys(zips)),
+        "place_hints": list(dict.fromkeys(hints))[:24],
+        "saved_home_count": len(profiles),
+    }
 
-    pdf.set_fill_color(10, 41, 104)
-    pdf.rect(0, 0, 210, 32, "F")
-    pdf.set_fill_color(0, 102, 204)
-    pdf.rect(0, 32, 210, 4, "F")
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Arial", "B", 16)
-    pdf.set_xy(12, 9)
-    pdf.cell(0, 8, _fpdf_safe("HURRICANE HUB REPORT"), ln=1)
-    pdf.set_font("Arial", "", 10)
-    pdf.set_xy(12, 18)
-    pdf.cell(0, 6, _fpdf_safe("Weekly home risk assessment"), ln=1)
-    pdf.set_font("Arial", "", 9)
-    pdf.set_xy(12, 24)
-    pdf.cell(0, 5, _fpdf_safe("Trusted Tampa metro flood + storm context"), ln=1)
 
-    pdf.ln(12)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 7, _fpdf_safe("Report details"), ln=1)
-    pdf.ln(1)
-    pdf.set_draw_color(10, 41, 104)
-    pdf.set_line_width(0.5)
-    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
-    pdf.ln(5)
-
-    pdf.set_font("Arial", "", 10)
-    pdf.multi_cell(0, 6, _fpdf_safe(f"Customer: {address}"), border=0)
-    pdf.multi_cell(0, 6, _fpdf_safe(f"Report date: {generated_at}"), border=0)
-    pdf.ln(2)
-
-    summary = [
-        ("Threat score", score),
-        ("Threat tier", tier),
-        ("Matched ZIP", matched_zip),
-        ("City", city),
-        ("County", county),
-        ("Evacuation zone", evacuation),
-        ("Power outage polygons", power_polygons),
-        ("FL511 layer hits", fl511_hits),
-    ]
-
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 7, _fpdf_safe("Assessment summary"), ln=1)
-    pdf.ln(1)
-    summary_start_y = pdf.get_y()
-
-    ring_thickness = 8
-    risk_circle_size = 32
-    risk_circle_x = 150
-    risk_circle_y = pdf.get_y() + risk_circle_size
-
-    pdf.set_draw_color(230, 230, 230)
-    pdf.set_line_width(ring_thickness)
-    pdf.ellipse(
-        risk_circle_x - risk_circle_size,
-        risk_circle_y - risk_circle_size,
-        risk_circle_size * 2,
-        risk_circle_size * 2,
-    )
-
-    score_value = 0
-    try:
-        score_value = min(max(int(float(score)), 0), 100)
-    except (TypeError, ValueError):
-        score_value = 0
-
-    if score_value > 0:
-        filled_angle = score_value * 3.6
-        steps = max(40, int(filled_angle / 3) + 1)
-        points = []
-        for step in range(steps + 1):
-            angle = math.radians(-90 + filled_angle * step / steps)
-            x = risk_circle_x + risk_circle_size * math.cos(angle)
-            y = risk_circle_y + risk_circle_size * math.sin(angle)
-            points.append((x, y))
-
-        pdf.set_draw_color(10, 41, 104)
-        pdf.set_line_width(ring_thickness)
-        for i in range(len(points) - 1):
-            x1, y1 = points[i]
-            x2, y2 = points[i + 1]
-            pdf.line(x1, y1, x2, y2)
-
-    pdf.set_font("Arial", "B", 16)
-    pdf.set_text_color(10, 41, 104)
-    pdf.set_xy(risk_circle_x - risk_circle_size, risk_circle_y - 5)
-    pdf.cell(risk_circle_size * 2, 8, _fpdf_safe(score), border=0, align="C")
-    pdf.set_font("Arial", "", 10)
-    pdf.set_text_color(10, 41, 104)
-    pdf.set_xy(risk_circle_x - risk_circle_size, risk_circle_y + 4)
-    pdf.cell(risk_circle_size * 2, 5, _fpdf_safe("Risk score"), border=0, align="C")
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_xy(15, summary_start_y)
-
-    pdf.set_left_margin(15)
-    pdf.set_right_margin(15)
-    pdf.set_font("Arial", "", 9)
-    for label, value in summary:
-        pdf.set_font("Arial", "B", 9)
-        pdf.set_text_color(10, 41, 104)
-        pdf.cell(40, 5, _fpdf_safe(f"{label}: "), border=0, ln=0)
-        pdf.set_font("Arial", "", 9)
-        pdf.set_text_color(0, 0, 0)
-        pdf.multi_cell(0, 5, _fpdf_safe(value), border=0, align='L')
-        pdf.ln(1)
-        pdf.set_x(15)
-
-    pdf.set_xy(15, max(pdf.get_y(), risk_circle_y + risk_circle_size) + 8)
-    pdf.set_text_color(10, 41, 104)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 7, _fpdf_safe("Recommendations"), ln=1)
-    pdf.ln(2)
-
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Arial", "", 10)
-    for item in recommendations:
-        pdf.multi_cell(0, 6, _fpdf_safe(f"- {item}"), border=0)
-        pdf.ln(1)
-
-    # push County emergency URL down only if there is enough space on the same page
-    url_block_top = pdf.h - 42
-    if pdf.get_y() < url_block_top:
-        pdf.set_y(url_block_top)
-
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(0, 5, _fpdf_safe("County emergency URL:"), border=0, ln=1)
-    pdf.set_text_color(0, 102, 204)
-    pdf.set_font("Arial", "U", 9)
-    pdf.multi_cell(0, 5, _fpdf_safe(county_url), border=0, align='L')
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Arial", "", 10)
-
-    footer_y = pdf.h - 18
-    if pdf.get_y() < footer_y:
-        pdf.set_y(footer_y)
-
-    pdf.set_font("Arial", "I", 9)
-    pdf.set_text_color(120, 120, 120)
-    pdf.cell(0, 6, _fpdf_safe("Thank you for choosing Hurricane Hub. Questions? Contact our team anytime."), ln=1, align="C")
-    pdf.cell(0, 6, _fpdf_safe(generated_at), ln=1, align="C")
-
-    return pdf.output(dest="S").encode("latin-1", errors="replace")
+def _rank_news_feed_for_user(
+    items: list[dict],
+    profiles: list[dict],
+    *,
+    limit: int = 72,
+) -> tuple[list[dict], dict[str, object]]:
+    loc = _reader_location_from_profiles(profiles)
+    if not items:
+        return [], loc
+    scored: list[tuple[int, str, int, dict]] = []
+    for it in items:
+        hay = _news_haystack(it)
+        score = 0
+        for z in loc["zips"]:
+            if isinstance(z, str) and z in hay:
+                score += 7
+        for term in _TB_REGION_TERMS:
+            if term in hay:
+                score += 2
+        for hint in loc["place_hints"]:
+            if isinstance(hint, str) and len(hint) >= 4 and hint in hay:
+                score += 5
+        pub = str(it.get("published_at") or "")
+        eid = it.get("id")
+        try:
+            eid_n = int(eid) if eid is not None else 0
+        except (TypeError, ValueError):
+            eid_n = 0
+        scored.append((score, pub, eid_n, it))
+    scored.sort(key=lambda x: (-x[0], x[1], -x[2]))
+    out = [t[3] for t in scored[:limit]]
+    return out, loc
 
 
 def login_required(view):
@@ -345,6 +331,70 @@ def inject_user():
     return {"current_user": user}
 
 
+def _assistant_chat_page_for_request() -> str:
+    ep = (request.endpoint or "").strip()
+    if ep == "dashboard_page":
+        return "dashboard"
+    if ep == "evacuation_page":
+        return "evacuation"
+    if ep in ("homes_page", "home_snapshot_page"):
+        return "home_risk"
+    if ep == "notifications_page":
+        return "notifications"
+    return "general"
+
+
+@app.context_processor
+def inject_assistant_chat_page():
+    return {"assistant_chat_page": _assistant_chat_page_for_request()}
+
+
+@app.context_processor
+def inject_support_contact():
+    raw = (os.environ.get("MAIL_DEFAULT_SENDER") or os.environ.get("MAIL_USERNAME") or "").strip()
+    email = raw
+    if "<" in raw and ">" in raw:
+        m = re.search(r"<([^>]+)>", raw)
+        if m:
+            email = (m.group(1) or "").strip()
+    if email:
+        sub = quote("Hurricane Hub — API higher limits")
+        bod = quote(
+            "Hello,\n\nI would like to discuss higher API rate limits for Hurricane Hub.\n\nThank you,\n"
+        )
+        mailto_limits = f"mailto:{email}?subject={sub}&body={bod}"
+    else:
+        mailto_limits = ""
+    return {"support_contact_email": email, "support_mailto_api_limits": mailto_limits}
+
+
+@app.before_request
+def _block_until_email_verified():
+    """
+    After password check, users with pending_verify_uid must complete the code step
+    before any other page (except verify flow, static files, and API JSON — those stay 401).
+    """
+    if request.endpoint is None:
+        return None
+    if request.endpoint == "static":
+        return None
+    if request.path.startswith("/api/"):
+        return None
+    pending = session.get("pending_verify_uid")
+    if not pending:
+        return None
+    if request.endpoint == "login" and request.args.get("abandon_verify") == "1":
+        session.pop("pending_verify_uid", None)
+        session.pop("pending_next", None)
+        session.pop("pending_verify_reason", None)
+        return None
+    if request.endpoint == "verify_email":
+        return None
+    if request.endpoint == "login":
+        return redirect(url_for("verify_email"))
+    return redirect(url_for("verify_email"))
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -355,10 +405,27 @@ def dashboard_page():
     return render_template("dashboard.html")
 
 
+@app.route("/evacuation-traffic")
+def evacuation_page():
+    """Evacuation zones + traffic near pin + regional feeds (companion to main dashboard)."""
+    return render_template("evacuation.html")
+
+
+@app.route("/faq")
+def faq_page():
+    return render_template("faq.html")
+
+
 @app.route("/how-scores")
 def how_scores_page():
-    """Technical methodology for TDS — public; rest of the app stays plain-language."""
+    """Short plain-language description of the risk score."""
     return render_template("how_scores.html")
+
+
+@app.route("/data-api")
+def data_api_page():
+    """Reference page for public read-style JSON endpoints (news DB, ZIP catalog, regional lookup)."""
+    return render_template("api_docs.html")
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -368,26 +435,142 @@ def login():
         next_url = (request.form.get("next") or "").strip()
         user = verify_login(request.form.get("username", ""), request.form.get("password", ""))
         if user:
+            if user_needs_email_verification(user):
+                code, ch_err = create_email_challenge(user["id"])
+                if not code:
+                    flash(ch_err or "Could not send a verification code. Try again later.", "error")
+                    return render_template("login.html", next_url=next_url, demo_hint=_login_demo_hint())
+                ok_send, send_err = send_login_verification_code(
+                    user["email"], code, username=str(user.get("username") or "")
+                )
+                if not ok_send:
+                    flash(send_err or "Could not send email. Check mail settings.", "error")
+                    return render_template("login.html", next_url=next_url, demo_hint=_login_demo_hint())
+                session.clear()
+                session["pending_verify_uid"] = user["id"]
+                safe_next = _safe_internal_next(next_url)
+                if safe_next:
+                    session["pending_next"] = safe_next
+                return redirect(url_for("verify_email"))
             session.clear()
             session["user_id"] = user["id"]
             flash("Signed in.", "success")
             dest = _safe_internal_next(next_url) or url_for("homes_page")
             return redirect(dest)
         flash("Invalid username or password.", "error")
-    demo_hint = ""
+    return render_template("login.html", next_url=next_url, demo_hint=_login_demo_hint())
+
+
+def _login_demo_hint() -> str:
     if os.environ.get("HURRICANE_HUB_SEED_DEMO", "1") == "1":
-        demo_hint = "First-time install seeds user demo / demo123."
-    return render_template("login.html", next_url=next_url, demo_hint=demo_hint)
+        return "First-time install seeds user demo / demo123 (no email step)."
+    return ""
+
+
+@app.route("/verify-email", methods=["GET", "POST"])
+def verify_email():
+    uid_raw = session.get("pending_verify_uid")
+    try:
+        uid = int(uid_raw)
+    except (TypeError, ValueError):
+        uid = None
+    if uid is None or uid <= 0:
+        flash("Sign in first to verify your email.", "error")
+        return redirect(url_for("login"))
+
+    row = get_user_by_id(uid)
+    if not row:
+        session.pop("pending_verify_uid", None)
+        session.pop("pending_next", None)
+        session.pop("pending_verify_reason", None)
+        flash("Session expired. Please sign in again.", "error")
+        return redirect(url_for("login"))
+
+    if request.method == "POST":
+        action = (request.form.get("action") or "verify").strip().lower()
+        if action == "resend":
+            code, ch_err = create_email_challenge(uid)
+            if not code:
+                flash(ch_err or "Could not send another code yet.", "error")
+            else:
+                ok_send, send_err = send_login_verification_code(
+                    row["email"],
+                    code,
+                    username=str(row.get("username") or ""),
+                    for_signup=session.get("pending_verify_reason") == "signup",
+                )
+                if ok_send:
+                    flash("A new code was sent to your email.", "success")
+                else:
+                    flash(send_err or "Could not send email.", "error")
+            return render_template(
+                "verify_email.html",
+                email_mask=_mask_email(row.get("email") or ""),
+            )
+
+        code = (request.form.get("code") or "").strip().replace(" ", "")
+        if not code.isdigit() or len(code) != 6:
+            flash("Enter the 6-digit code from your email.", "error")
+            return render_template(
+                "verify_email.html",
+                email_mask=_mask_email(row.get("email") or ""),
+            )
+        if verify_email_challenge(uid, code):
+            session.pop("pending_verify_uid", None)
+            session.pop("pending_verify_reason", None)
+            next_raw = session.pop("pending_next", None)
+            session["user_id"] = uid
+            flash("Email verified. You're signed in.", "success")
+            dest = _safe_internal_next(next_raw) if isinstance(next_raw, str) else None
+            return redirect(dest or url_for("homes_page"))
+        flash("That code is incorrect or expired. Try again or request a new code.", "error")
+
+    return render_template(
+        "verify_email.html",
+        email_mask=_mask_email(row.get("email") or ""),
+    )
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
-        ok, err = create_user(request.form.get("username", ""), request.form.get("password", ""))
-        if ok:
-            flash("Account created. Log in below.", "success")
-            return redirect(url_for("login"))
-        flash(err, "error")
+        ok, err, new_uid = create_user(
+            request.form.get("username", ""),
+            request.form.get("password", ""),
+            request.form.get("email", ""),
+            alert_opt_in=request.form.get("alert_severity_email") == "on",
+        )
+        if ok and new_uid is not None:
+            row = get_user_by_id(new_uid)
+            if row and int(row.get("email_verified") or 0) == 0:
+                code, ch_err = create_email_challenge(new_uid)
+                if not code:
+                    flash(
+                        ch_err or "Account was created but we could not send a verification code. Try logging in to request one.",
+                        "error",
+                    )
+                    return render_template("register.html")
+                ok_send, send_err = send_login_verification_code(
+                    row["email"],
+                    code,
+                    username=str(row.get("username") or ""),
+                    for_signup=True,
+                )
+                if not ok_send:
+                    flash(
+                        send_err
+                        or "Could not send email. For Gmail use an App Password in MAIL_PASSWORD (not your normal Gmail password).",
+                        "error",
+                    )
+                    return render_template("register.html")
+                session.clear()
+                session["pending_verify_uid"] = new_uid
+                session["pending_verify_reason"] = "signup"
+                session["pending_next"] = url_for("homes_page")
+                return redirect(url_for("verify_email"))
+            return render_template("register.html", account_created=True)
+        if not ok:
+            flash(err, "error")
     return render_template("register.html")
 
 
@@ -403,11 +586,13 @@ def api_dashboard():
     lat = request.args.get("lat", type=float)
     lon = request.args.get("lon", type=float)
     verbose = request.args.get("verbose", "0") == "1"
-    data = aggregate_dashboard(lat=lat, lon=lon, verbose=verbose)
     if request.args.get("include_tampa") == "1":
         plat = lat if lat is not None else DEFAULT_LAT
         plon = lon if lon is not None else DEFAULT_LON
-        data["tampa_bay_regional"] = regional_lookup(plat, plon)
+        data, reg = get_or_build_dashboard_regional_pair(plat, plon, verbose=verbose)
+        data["tampa_bay_regional"] = reg
+    else:
+        data = aggregate_dashboard(lat=lat, lon=lon, verbose=verbose)
     return jsonify(data)
 
 
@@ -422,7 +607,7 @@ def api_report():
     lon = request.args.get("lon", type=float)
     verbose = request.args.get("verbose", "0") == "1"
     data = aggregate_dashboard(lat=lat, lon=lon, verbose=verbose)
-    text = data.get("detailed_report") or ""
+    text = strip_internal_api_refs(data.get("detailed_report") or "")
     return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
@@ -458,11 +643,7 @@ def tampa_hub():
     verbose = request.args.get("verbose", "0") == "1"
     if lat is None or lon is None:
         return jsonify({"error": "lat and lon required"}), 400
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_dash = pool.submit(aggregate_dashboard, lat, lon, verbose)
-        f_reg = pool.submit(regional_lookup, lat, lon)
-        dash = f_dash.result()
-        reg = f_reg.result()
+    dash, reg = get_or_build_dashboard_regional_pair(lat, lon, verbose=verbose)
     return jsonify({"dashboard": dash, "tampa_bay_regional": reg})
 
 
@@ -484,11 +665,7 @@ def tampa_zip(zip_code: str):
     if not row:
         return jsonify({"error": "zip not in local Tampa metro database"}), 404
     lat, lon = row["lat"], row["lon"]
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_dash = pool.submit(aggregate_dashboard, lat, lon, False)
-        f_reg = pool.submit(regional_lookup, lat, lon)
-        dash = f_dash.result()
-        reg = f_reg.result()
+    dash, reg = get_or_build_dashboard_regional_pair(lat, lon, verbose=False)
     return jsonify(
         {
             "zip_record": row,
@@ -514,37 +691,149 @@ def tampa_zip_stats():
     return jsonify(zip_stats())
 
 
-@app.route("/api/heatmap/data")
-def heatmap_data():
+@app.route("/api/news/feed")
+def api_news_feed():
+    """News headlines from SQLite; triggers background re-ingest when the cache is stale or empty."""
     seed_from_csv_if_empty()
-    zips = get_all_zips()
-    simulate = (request.args.get("simulate") or "").strip().lower()
-    heat_data: list[list[float]] = []
+    refresh_info = request_news_refresh_if_stale()
+    try:
+        limit = int(request.args.get("limit", default=50) or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset = int(request.args.get("offset", default=0) or 0)
+    except (TypeError, ValueError):
+        offset = 0
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    source = (request.args.get("source") or "").strip() or None
+    house_name = (request.args.get("house_name") or request.args.get("home_nickname") or "").strip()
 
-    if simulate in ("mild", "big"):
-        intensity = 0.30 if simulate == "mild" else 0.70
-        for zip_row in zips:
-            lat = zip_row.get("lat")
-            lon = zip_row.get("lon")
-            if lat is None or lon is None:
-                continue
-            heat_data.append([float(lat), float(lon), intensity])
-        return jsonify({"heat_data": heat_data, "simulate": simulate})
+    key_raw = _request_api_key_raw()
+    key_uid: int | None = None
+    if key_raw:
+        key_uid = resolve_user_from_api_key(key_raw)
+        if key_uid is None:
+            return jsonify({"error": "Invalid or revoked API key."}), 401
 
-    for zip_row in zips:
-        lat = zip_row.get("lat")
-        lon = zip_row.get("lon")
-        if lat is None or lon is None:
-            continue
-        try:
-            dash = aggregate_dashboard(lat=float(lat), lon=float(lon), verbose=False)
-            score = (dash.get("threat") or {}).get("score", 0)
-            intensity = min(max(float(score) / 100.0, 0.0), 1.0)
-        except Exception:
-            intensity = 0.0
-        heat_data.append([float(lat), float(lon), intensity])
+    stats = news_feed_stats()
+    last_ingest = meta_get_value("news_last_ingest_at")
 
-    return jsonify({"heat_data": heat_data, "simulate": ""})
+    if key_uid is not None:
+        profiles = list_home_profiles(key_uid, skip_zip_seed=True)
+        if house_name:
+            profiles = _filter_profiles_by_house_name(profiles, house_name)
+            if not profiles:
+                return jsonify(
+                    {"error": "house_name did not match any saved home for this API key."}
+                ), 404
+        raw = list_news_feed_items(320, source=source)
+        ranked, reader_loc = _rank_news_feed_for_user(raw, profiles, limit=320)
+        items = ranked[offset : offset + limit]
+        return jsonify(
+            {
+                "items": items,
+                "stats": stats,
+                "last_ingest_at": last_ingest,
+                "refresh": refresh_info,
+                "query": {
+                    "limit": limit,
+                    "offset": offset,
+                    "source": source,
+                    "house_name": house_name or None,
+                    "personalized": True,
+                },
+                "reader_location": reader_loc,
+            }
+        )
+
+    items = list_news_feed_items(limit=limit, offset=offset, source=source)
+    return jsonify(
+        {
+            "items": items,
+            "stats": stats,
+            "last_ingest_at": last_ingest,
+            "refresh": refresh_info,
+            "query": {
+                "limit": limit,
+                "offset": offset,
+                "source": source,
+                "house_name": None,
+                "personalized": False,
+            },
+        }
+    )
+
+
+@app.route("/api/news/ingest", methods=["POST"])
+def api_news_ingest():
+    """
+    Fetch Mediastack, GNews, RSS (FDEM URL + NHC), NWS TBW-filtered alerts, Reddit, HCFL page.
+    Protected: set NEWS_INGEST_SECRET and send header X-News-Ingest-Secret, or call from localhost.
+    """
+    if not _news_ingest_allowed():
+        return jsonify({"error": "Forbidden", "hint": "Set NEWS_INGEST_SECRET + X-News-Ingest-Secret, or use localhost."}), 403
+    payload = request.get_json(silent=True) or {}
+    md = payload.get("mediastack_date")
+    mediastack_date = str(md).strip() if md not in (None, "") else None
+    gf = payload.get("gnews_from")
+    gt = payload.get("gnews_to")
+    gnews_from = str(gf).strip() if gf not in (None, "") else None
+    gnews_to = str(gt).strip() if gt not in (None, "") else None
+    skip_hcfl = bool(payload.get("skip_hcfl"))
+    reddit_limit = int(payload.get("reddit_limit") or 25)
+    result = run_full_ingest(
+        mediastack_date=mediastack_date,
+        gnews_from=gnews_from,
+        gnews_to=gnews_to,
+        reddit_limit=max(1, min(reddit_limit, 100)),
+        skip_hcfl=skip_hcfl,
+    )
+    return jsonify(result)
+
+
+@app.route("/api/news/refresh", methods=["POST"])
+@login_required
+def api_news_refresh():
+    """Queue a full re-ingest into the database (same sources as /api/news/ingest)."""
+    seed_from_csv_if_empty()
+    return jsonify(force_news_refresh_async())
+
+
+@app.route("/api/news/ai-brief", methods=["POST"])
+@login_required
+def api_news_ai_brief():
+    """Claude summary of articles currently stored in news_feed_items."""
+    seed_from_csv_if_empty()
+    uid = _session_user_id()
+    profiles = list_home_profiles(uid, skip_zip_seed=True) if uid is not None else []
+    raw = list_news_feed_items(200)
+    items, loc = _rank_news_feed_for_user(raw, profiles, limit=72)
+    if not items:
+        return jsonify({"error": "No articles in the database yet — wait for the feed refresh to finish."}), 400
+    brief, err = call_claude_news_brief(articles=items, reader_location=loc)
+    if err:
+        return jsonify({"error": err}), 502
+    return jsonify({"brief": brief, "article_count": len(items)})
+
+
+@app.route("/notifications")
+@login_required
+def notifications_page():
+    """Email preferences, sample mail, and DB-backed news + AI brief (logged-in)."""
+    seed_from_csv_if_empty()
+    request_news_refresh_if_stale()
+    uid = _session_user_id()
+    profiles = list_home_profiles(uid, skip_zip_seed=True) if uid is not None else []
+    raw = list_news_feed_items(200)
+    news_items, news_reader_location = _rank_news_feed_for_user(raw, profiles, limit=72)
+    return render_template(
+        "notifications.html",
+        news_items=news_items,
+        news_last_sync=meta_get_value("news_last_ingest_at"),
+        news_stats=news_feed_stats(),
+        news_reader_location=news_reader_location,
+    )
 
 
 @app.route("/api/assessment/home", methods=["GET", "POST"])
@@ -590,7 +879,7 @@ def api_assessment_home():
         return jsonify(
             {
                 "error": "Provide address (4+ characters) or both lat and lon",
-                "hint": "GET /api/assessment/home?address=Tampa+FL or ?lat=27.95&lon=-82.45&compact=1",
+                "hint": "Use the address or lat/lon query parameters documented on the Data API page (signed-in home assessment uses the same fields).",
             }
         ), 400
 
@@ -611,47 +900,163 @@ def api_assessment_home():
                 **compact_home_assessment(out),
             }
         )
-
     return jsonify({"schema": "hurricane_hub.home_assessment.full.v1", **out})
 
 
-@app.route("/api/assessment/home/pdf")
+@app.route("/api/user/threat-tier-watch", methods=["POST"])
 @login_required
-def api_assessment_home_pdf():
-    address = (request.args.get("address") or request.args.get("q") or "").strip()
-    lat = request.args.get("lat", type=float)
-    lon = request.args.get("lon", type=float)
+def api_user_threat_tier_watch():
+    uid = _session_user_id()
+    if uid is None:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    tier = (str(data.get("tier") or "")).strip().lower()
+    allowed = {"low", "elevated", "high", "extreme"}
+    if tier not in allowed:
+        return jsonify({"error": "invalid tier"}), 400
+    process_severity_change(uid, tier, data.get("score"))
+    return jsonify({"ok": True})
 
-    if address and len(address) >= 4:
-        out = assess_address(address)
-    elif lat is not None and lon is not None:
-        out = assess_coordinates(lat, lon)
-    else:
-        return (
-            jsonify(
-                {
-                    "error": "Provide address (4+ characters) or both lat and lon",
-                    "hint": "GET /api/assessment/home/pdf?address=Tampa+FL or ?lat=27.95&lon=-82.45",
-                }
-            ),
-            400,
+
+@app.route("/api/user/alert-email-pref", methods=["POST"])
+@login_required
+def api_user_alert_email_pref():
+    uid = _session_user_id()
+    if uid is None:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    if "opt_in" not in data:
+        return jsonify({"error": "opt_in required"}), 400
+    opt_in = bool(data.get("opt_in"))
+    set_user_alert_email_opt_in(uid, opt_in)
+    return jsonify({"ok": True, "opt_in": opt_in})
+
+
+@app.route("/api/user/me", methods=["GET"])
+@login_required
+def api_user_me():
+    """Account flags and saved homes — all from SQLite (no live weather in this response)."""
+    uid = _session_user_id()
+    if uid is None:
+        return jsonify({"error": "Unauthorized"}), 401
+    user = get_user_by_id(uid)
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    profiles = list_home_profiles(uid, skip_zip_seed=True)
+    return jsonify(
+        {
+            "user": {
+                "id": user["id"],
+                "username": user.get("username"),
+                "email": user.get("email"),
+                "email_verified": int(user.get("email_verified") or 0),
+                "alert_email_opt_in": int(user.get("alert_email_opt_in") or 0),
+                "evacuation_alert_opt_in": int(user.get("evacuation_alert_opt_in") or 0),
+            },
+            "profiles": profiles,
+        }
+    )
+
+
+@app.route("/api/user/evacuation-alert-pref", methods=["POST"])
+@login_required
+def api_user_evacuation_alert_pref():
+    uid = _session_user_id()
+    if uid is None:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    if "opt_in" not in data:
+        return jsonify({"error": "opt_in required"}), 400
+    opt_in = bool(data.get("opt_in"))
+    set_user_evacuation_alert_opt_in(uid, opt_in)
+    return jsonify({"ok": True, "opt_in": opt_in})
+
+
+@app.route("/api/user/evacuation-alert-test-email", methods=["POST"])
+@login_required
+def api_user_evacuation_alert_test_email():
+    uid = _session_user_id()
+    if uid is None:
+        return jsonify({"error": "Unauthorized"}), 401
+    user = get_user_by_id(uid)
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    if not int(user.get("email_verified") or 0):
+        return jsonify({"error": "Verify your email before test sends."}), 400
+    email = (user.get("email") or "").strip()
+    if not email:
+        return jsonify({"error": "No email on file."}), 400
+    now = time.time()
+    last = session.get("evac_alert_test_ts")
+    if last is not None and now - float(last) < 60:
+        return jsonify({"error": "Wait about a minute between test emails."}), 429
+    profs = list_home_profiles(uid, skip_zip_seed=True)
+    nick = (profs[0].get("nickname") if profs else None) or "My saved home"
+    ok, err = send_evacuation_zone_sample_email(
+        email,
+        username=str(user.get("username") or ""),
+        sample_home_nickname=str(nick),
+    )
+    if not ok:
+        return jsonify({"error": err or "Send failed"}), 500
+    session["evac_alert_test_ts"] = now
+    return jsonify({"ok": True, "sent_to": _mask_email(email)})
+
+
+@app.route("/api/user/notification-prefs", methods=["POST"])
+@login_required
+def api_user_notification_prefs():
+    """Save tier + evacuation email flags together; confirm by email when any option is on."""
+    uid = _session_user_id()
+    if uid is None:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    tier = bool(data.get("tier_alerts"))
+    evac = bool(data.get("evacuation_alerts"))
+    set_user_alert_email_opt_in(uid, tier)
+    set_user_evacuation_alert_opt_in(uid, evac)
+    user = get_user_by_id(uid)
+    email_sent = False
+    if (
+        user
+        and smtp_configured()
+        and (tier or evac)
+        and int(user.get("email_verified") or 0)
+        and (user.get("email") or "").strip()
+    ):
+        ok, _ = send_notification_preferences_confirmation_email(
+            (user.get("email") or "").strip(),
+            username=str(user.get("username") or ""),
+            tier_alerts=tier,
+            evacuation_alerts=evac,
         )
+        email_sent = bool(ok)
+    return jsonify(
+        {
+            "ok": True,
+            "tier_alerts": tier,
+            "evacuation_alerts": evac,
+            "confirmation_email_sent": email_sent,
+        }
+    )
 
-    if out.get("error"):
-        err = out["error"]
-        low = str(err).lower()
-        code = 404 if "no geocode" in low or "zip not" in low or "not in tampa" in low or "not in local" in low else 400
-        return jsonify({"error": err}), code
 
-    pdf_bytes = _render_assessment_pdf(out)
-    safe = address.replace("/", "-").replace("\\\\", "-")
-    safe = "".join([c if c.isalnum() or c in " -_" else "-" for c in safe]).strip().replace(" ", "-")
-    if not safe:
-        safe = "home-summary"
-    filename = f"hurricane-hub-home-summary-{safe[:40]}.pdf"
-    response = Response(pdf_bytes, mimetype="application/pdf")
-    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-    return response
+@app.route("/api/user/api-key", methods=["GET", "POST"])
+@login_required
+def api_user_api_key():
+    """Mint or check a personal API key for personalized news feed queries."""
+    uid = _session_user_id()
+    if uid is None:
+        return jsonify({"error": "Unauthorized", "login_url": url_for("login")}), 401
+    if request.method == "GET":
+        return jsonify({"has_api_key": user_has_api_key(uid)})
+    plain = mint_user_api_key(uid)
+    return jsonify(
+        {
+            "api_key": plain,
+            "message": "Copy this key now — the server only stores a hash. Use header X-API-Key or Authorization: Bearer …",
+        }
+    )
 
 
 @app.route("/homes")
@@ -659,11 +1064,6 @@ def api_assessment_home_pdf():
 def homes_page():
     seed_from_csv_if_empty()
     return render_template("homes.html")
-
-
-@app.route("/heatmap")
-def heatmap_page():
-    return render_template("heatmap.html")
 
 
 @app.route("/homes/<int:pid>")
@@ -734,7 +1134,7 @@ def api_profiles():
     if uid is None:
         return jsonify({"error": "Unauthorized", "login_url": url_for("login")}), 401
     if request.method == "GET":
-        return jsonify({"profiles": list_home_profiles(uid)})
+        return jsonify({"profiles": list_home_profiles(uid, skip_zip_seed=True)})
     data = request.get_json(silent=True) or {}
     nickname = (data.get("nickname") or "My home").strip()
     address = (data.get("address") or "").strip()
@@ -772,26 +1172,83 @@ def api_profile_one(pid: int):
     return jsonify(dict(row))
 
 
+_TOPIC_SUMMARY_LABELS = {
+    "alerts": "Weather alerts & rain chances",
+    "coastal": "Bay water & seas",
+    "weather": "Rain & wind (forecast)",
+    "rivers": "Rivers & creek levels",
+    "terrain": "Ground height at this spot",
+    "tds": "How your risk score works",
+    "evac": "Evacuation zone",
+    "traffic": "Nearby traffic & route check",
+    "local": "ZIP & regional context",
+}
+_TOPIC_SUMMARY_ALLOWED: dict[str, frozenset[str]] = {
+    "dashboard": frozenset(
+        {"alerts", "coastal", "weather", "rivers", "terrain", "tds"},
+    ),
+    "home_risk": frozenset(
+        {
+            "alerts",
+            "coastal",
+            "weather",
+            "rivers",
+            "terrain",
+            "tds",
+            "evac",
+            "traffic",
+            "local",
+        },
+    ),
+}
+
+
+@app.route("/api/assistant/topic-summary", methods=["POST"])
+@login_required
+def api_assistant_topic_summary():
+    """Brief AI blurb for the dashboard / home “Show me…” topic (logged-in only)."""
+    data = request.get_json(silent=True) or {}
+    page = (data.get("page") or "").strip()
+    allowed = _TOPIC_SUMMARY_ALLOWED.get(page)
+    if allowed is None:
+        return jsonify({"error": 'page must be "dashboard" or "home_risk"'}), 400
+    topic = sanitize_chat_text((data.get("topic") or "").strip(), max_len=64)
+    if topic not in allowed:
+        return jsonify({"error": "invalid or unsupported topic"}), 400
+    ctx = data.get("context")
+    if ctx is None or not isinstance(ctx, dict):
+        return jsonify({"error": "context must be a JSON object"}), 400
+    label = _TOPIC_SUMMARY_LABELS.get(topic, topic)
+    reply, err = call_claude_topic_brief(
+        page=page,
+        context=dict(ctx),
+        topic_key=topic,
+        topic_label=label,
+    )
+    if err:
+        low = err.lower()
+        code = 503 if "not configured" in low or "anthropic_api_key" in low else 502
+        return jsonify({"error": err}), code
+    return jsonify({"reply": reply})
+
+
 @app.route("/api/assistant/chat", methods=["POST"])
 @login_required
 def api_assistant_chat():
-    """
-    Claude-powered Q&A using the JSON snapshot the client sends (dashboard or home assessment).
-    Requires ANTHROPIC_API_KEY on the server.
-    """
+    """In-app guide: answers using the page snapshot the client sends. Server needs API key in .env."""
     data = request.get_json(silent=True) or {}
     page = (data.get("page") or "").strip()
-    if page not in ("dashboard", "home_risk"):
-        return jsonify({"error": 'page must be "dashboard" or "home_risk"'}), 400
+    if page not in ("dashboard", "home_risk", "general", "evacuation", "notifications"):
+        return jsonify(
+            {"error": 'page must be "dashboard", "home_risk", "evacuation", "notifications", or "general"'}
+        ), 400
     ctx = data.get("context")
     if ctx is not None and not isinstance(ctx, dict):
         return jsonify({"error": "context must be a JSON object"}), 400
     ctx = dict(ctx) if isinstance(ctx, dict) else {}
-    prompt = (data.get("message") or data.get("prompt") or "").strip()
+    prompt = sanitize_chat_text((data.get("message") or data.get("prompt") or ""), max_len=8000)
     if not prompt:
         return jsonify({"error": "message is required"}), 400
-    if len(prompt) > 8000:
-        return jsonify({"error": "message too long"}), 400
 
     prior = _normalize_assistant_prior_messages(data.get("messages"))
     reply, err = call_claude(page=page, context=ctx, prior_messages=prior, user_message=prompt)
@@ -823,7 +1280,13 @@ def create_app():
     return app
 
 
+@app.errorhandler(404)
+def page_not_found(_e):
+    return render_template("404.html"), 404
+
+
 init_auth_db()
+request_news_refresh_if_stale()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))

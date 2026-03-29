@@ -8,6 +8,15 @@ function esc(s) {
   return d.innerHTML;
 }
 
+/** Drop Hurricane Hub /api/... paths from shared downloads (data may still echo internal hints). */
+function stripInternalApiRefs(s) {
+  let t = String(s ?? "");
+  t = t.replace(/https?:\/\/[^\s"'<>]+\/api\/[^\s"'<>]*/gi, "");
+  t = t.replace(/\/api\/[a-z0-9_\-./?=&+%[\]{}#]*/gi, "");
+  t = t.replace(/\b(?:GET|POST|PUT|PATCH|DELETE)\s+\/api\/\S+/gi, "");
+  return t.replace(/[ \t]{2,}/g, " ").trim();
+}
+
 const TIER_LABELS = {
   low: "Low concern",
   elevated: "Elevated",
@@ -63,7 +72,10 @@ export function downloadShareReport(data) {
   const tierLabel = TIER_LABELS[tier] || tier;
 
   const loc = geo.display_name || (geo.lat != null && geo.lon != null ? `${geo.lat}, ${geo.lon}` : "Address on file");
-  const reasons = (rc.threat_reasons || th.reasons || []).slice(0, 3).map((r) => String(r).trim()).filter(Boolean);
+  const reasons = (rc.threat_reasons || th.reasons || [])
+    .slice(0, 3)
+    .map((r) => stripInternalApiRefs(String(r).trim()))
+    .filter(Boolean);
 
   const evac = rc.evacuation_level ?? data.tampa_bay_regional?.evacuation?.evac_level ?? data.tampa_bay_regional?.evacuation?.evac_zone;
   const evacLine =

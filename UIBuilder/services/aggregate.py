@@ -7,6 +7,8 @@ import math
 import statistics
 from typing import Any
 
+from services.report_sanitize import strip_internal_api_refs
+
 
 def parse_usgs_iv_json(data: Any) -> dict[str, Any]:
     """Latest instantaneous values per site/parameter from USGS WaterML JSON."""
@@ -383,7 +385,7 @@ def build_detailed_report(metrics: dict[str, Any], threat: dict[str, Any]) -> st
 
     lines.append("")
     lines.append(threat.get("disclaimer", ""))
-    return "\n".join(lines)
+    return strip_internal_api_refs("\n".join(lines))
 
 
 def _sigmoid_subscore_0_10(x: float, m: float, k: float) -> float:
