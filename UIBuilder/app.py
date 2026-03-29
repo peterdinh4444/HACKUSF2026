@@ -41,6 +41,7 @@ from services.regional_tampa import regional_lookup
 from services.claude_chat import call_claude
 from services.tampa_db import (
     delete_home_profile,
+    get_all_zips,
     get_by_zip,
     get_home_profile,
     list_home_profiles,
@@ -314,6 +315,39 @@ def tampa_zip_stats():
     return jsonify(zip_stats())
 
 
+@app.route("/api/heatmap/data")
+def heatmap_data():
+    seed_from_csv_if_empty()
+    zips = get_all_zips()
+    simulate = (request.args.get("simulate") or "").strip().lower()
+    heat_data: list[list[float]] = []
+
+    if simulate in ("mild", "big"):
+        intensity = 0.30 if simulate == "mild" else 0.70
+        for zip_row in zips:
+            lat = zip_row.get("lat")
+            lon = zip_row.get("lon")
+            if lat is None or lon is None:
+                continue
+            heat_data.append([float(lat), float(lon), intensity])
+        return jsonify({"heat_data": heat_data, "simulate": simulate})
+
+    for zip_row in zips:
+        lat = zip_row.get("lat")
+        lon = zip_row.get("lon")
+        if lat is None or lon is None:
+            continue
+        try:
+            dash = aggregate_dashboard(lat=float(lat), lon=float(lon), verbose=False)
+            score = (dash.get("threat") or {}).get("score", 0)
+            intensity = min(max(float(score) / 100.0, 0.0), 1.0)
+        except Exception:
+            intensity = 0.0
+        heat_data.append([float(lat), float(lon), intensity])
+
+    return jsonify({"heat_data": heat_data, "simulate": ""})
+
+
 @app.route("/api/assessment/home", methods=["GET", "POST"])
 @login_required
 def api_assessment_home():
@@ -386,6 +420,11 @@ def api_assessment_home():
 def homes_page():
     seed_from_csv_if_empty()
     return render_template("homes.html")
+
+
+@app.route("/heatmap")
+def heatmap_page():
+    return render_template("heatmap.html")
 
 
 @app.route("/homes/<int:pid>")
