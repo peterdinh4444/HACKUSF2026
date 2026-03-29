@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}How we calculate risk scores{% endblock %}
+{% block main_class %} main--dash{% endblock %}
+{% block content %}
+<div class="dash how-scores">
+  <header class="dash-header">
+    <div class="dash-header__lead">
+      <p class="dash-kicker">Technical reference</p>
+      <h1 class="dash-title">True Threat Detection Score (TDS)</h1>
+      <p class="dash-lede how-scores__lede-easy">
+        This page is for the <strong>exact math</strong> behind the 0–100 risk number. The rest of Hurricane Hub uses plain language on purpose.
+        Nothing here replaces NWS warnings or county evacuation orders.
+      </p>
+    </div>
+  </header>
+
+  <section class="how-scores__tech" aria-labelledby="tds-formal-title">
+    <h2 class="how-scores__tech-title" id="tds-formal-title">Formal aggregation</h2>
+    <p class="how-scores__equation" aria-label="TDS equation">
+      <strong>TDS</strong> = min (100, (Σ<sub class="tds-sub">i</sub> <em>w</em><sub class="tds-sub">i</sub> · <em>s</em><sub class="tds-sub">i</sub>²) · <em>Z</em>)
+    </p>
+    <ul class="how-scores__list">
+      <li><em>s<sub class="tds-sub">i</sub></em> ∈ [0, 10] — sub-score for hazard <em>i</em>, from a sigmoid (logistic) transform of physical inputs.</li>
+      <li><em>w<sub class="tds-sub">i</sub></em> — non-negative weights (Tampa Bay defaults sum to 1 before squaring).</li>
+      <li>Squaring <em>s<sub class="tds-sub">i</sub></em> ensures one very large hazard term dominates the sum.</li>
+      <li><em>Z</em> — evacuation-zone multiplier from official GIS polygons (letters A–E where available).</li>
+    </ul>
+
+    <h3 class="how-scores__subhead">Sigmoid sub-score</h3>
+    <p class="how-scores__equation how-scores__equation--block">
+      <em>s</em> = 10 / (1 + exp(−<em>k</em>(<em>x</em> − <em>m</em>)))
+    </p>
+    <p class="how-scores__muted"><em>x</em> = measured input (e.g. gust mph, water anomaly); <em>m</em> = inflection; <em>k</em> = steepness.</p>
+
+    <h3 class="how-scores__subhead">Default weights (Tampa Bay prototype)</h3>
+    <table class="digest digest--dash how-scores__table">
+      <thead>
+        <tr>
+          <th scope="col">Hazard <em>i</em></th>
+          <th scope="col">Primary inputs</th>
+          <th scope="col"><em>w<sub class="tds-sub">i</sub></em></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">Coastal water / surge proxy</th><td>NOAA CO-OPS anomaly + level term</td><td>0.42</td></tr>
+        <tr><th scope="row">Wind</th><td>NWS hourly / Open-Meteo / ASOS gusts; NHC named storms; alert severity nudge</td><td>0.28</td></tr>
+        <tr><th scope="row">Inland flood</th><td>NWS flood-tagged alerts, USGS stages, 48h model rain</td><td>0.14</td></tr>
+        <tr><th scope="row">Route friction</th><td>FDOT / FL511 counts near the pin (closures, crashes, congestion)</td><td>0.10</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="how-scores__subhead">Zone multiplier <em>Z</em> (illustrative mapping)</h3>
+    <table class="digest digest--dash how-scores__table">
+      <thead>
+        <tr>
+          <th scope="col">Evacuation letter (GIS)</th>
+          <th scope="col"><em>Z</em></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">A</th><td>1.5</td></tr>
+        <tr><th scope="row">B</th><td>1.3</td></tr>
+        <tr><th scope="row">C</th><td>1.1</td></tr>
+        <tr><th scope="row">D</th><td>1.05</td></tr>
+        <tr><th scope="row">E</th><td>1.0</td></tr>
+        <tr><th scope="row">No polygon match</th><td>1.0</td></tr>
+        <tr><th scope="row">Matched, letter unclear</th><td>1.08</td></tr>
+      </tbody>
+    </table>
+    <p class="disclaimer how-scores__disclaimer">
+      County definitions and mandatory orders override any in-app number. Gauges fail, models disagree, and buffers do not resolve every driveway.
+      The live implementation is in <code>services/aggregate.py</code> (<code>compute_true_threat_detection_score</code>).
+    </p>
+  </section>
+
+  <section class="how-scores__api dash-section" aria-labelledby="api-home-title">
+    <div class="dash-section__head">
+      <h2 class="dash-section__title" id="api-home-title">API: home risk in one call</h2>
+      <p class="dash-section__hint">Signed-in users can pull the same bundle the Home risk page uses — no chaining dashboard + regional endpoints by hand.</p>
+    </div>
+    <div class="how-scores__api-card">
+      <p><strong>Full bundle</strong> (includes <code>dashboard</code>, <code>tampa_bay_regional</code>, <code>risk_card</code>):</p>
+      <pre class="how-scores__pre" tabindex="0">GET /api/assessment/home?address=500+Channelside+Dr,+Tampa+FL
+POST /api/assessment/home  Content-Type: application/json
+{"address": "500 Channelside Dr, Tampa FL"}</pre>
+      <p><strong>Coordinates</strong> (no geocoder):</p>
+      <pre class="how-scores__pre" tabindex="0">GET /api/assessment/home?lat=27.9506&amp;lon=-82.4572</pre>
+      <p><strong>Compact</strong> (scores + summaries only, no full metric trees):</p>
+      <pre class="how-scores__pre" tabindex="0">GET /api/assessment/home?address=Tampa+FL&amp;compact=1
+POST /api/assessment/home
+{"lat": 27.95, "lon": -82.45, "compact": true}</pre>
+      <p class="muted">Responses include <code>schema</code> (<code>…full.v1</code> or <code>…compact.v1</code>) for clients that version payloads.</p>
+    </div>
+  </section>
+</div>
+{% endblock %}

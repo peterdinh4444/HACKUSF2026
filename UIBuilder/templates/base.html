@@ -15,9 +15,9 @@
     <div class="shell nav__inner">
       <a class="nav__logo" href="{{ url_for('index') }}">Hurricane Hub</a>
       <nav class="nav__links" aria-label="Primary">
-        <a class="nav__link{% if request.endpoint == 'index' %} nav__link--active{% endif %}" href="{{ url_for('index') }}">Overview</a>
-        <a class="nav__link{% if request.endpoint == 'homes_page' %} nav__link--active{% endif %}" href="{{ url_for('homes_page') }}">Homes</a>
-        <a class="nav__link{% if request.endpoint == 'heatmap_page' %} nav__link--active{% endif %}" href="{{ url_for('heatmap_page') }}">Heat Map</a>
+        <a class="nav__link{% if request.endpoint == 'dashboard_page' %} nav__link--active{% endif %}" href="{{ url_for('dashboard_page') }}">Dashboard</a>
+        <a class="nav__link{% if request.endpoint in ('homes_page', 'home_snapshot_page') %} nav__link--active{% endif %}" href="{{ url_for('homes_page') }}">Home risk</a>
+        <a class="nav__link{% if request.endpoint == 'how_scores_page' %} nav__link--active{% endif %}" href="{{ url_for('how_scores_page') }}">How scores work</a>
       </nav>
       <div class="nav__auth">
         {% if current_user %}
@@ -33,7 +33,7 @@
     </div>
   </header>
 
-  <main class="shell main">
+  <main class="shell main{% block main_class %}{% endblock %}">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
       <ul class="flash-list" role="status">
@@ -45,6 +45,10 @@
     {% endwith %}
     {% block content %}{% endblock %}
   </main>
+
+  {% if current_user and assistant_chat_page %}
+  {% include "_assistant_chat.html" %}
+  {% endif %}
 
   <footer class="shell site-foot">
     <p>Public-data prototype for Tampa Bay storm readiness. Not official guidance — use <a href="https://www.weather.gov/tbw/" rel="noopener">NWS Tampa Bay</a> and county emergency managers.</p>

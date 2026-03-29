@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% set assistant_chat_page = "dashboard" %}
+{% block title %}Dashboard{% endblock %}
+{% block main_class %} main--dash{% endblock %}
+{% block content %}
+<div class="dash">
+  <header class="dash-header">
+    <div class="dash-header__lead">
+      <p class="dash-kicker">Tampa Bay · live public data</p>
+      <h1 class="dash-title">Readiness dashboard</h1>
+      <p class="dash-lede">One glance at your risk score, then pick a topic below if you want more detail.</p>
+    </div>
+    <div class="dash-header__meta" aria-label="Snapshot metadata">
+      <span class="dash-chip" id="coords-display" aria-live="polite">—° , —°</span>
+      <span class="dash-chip dash-chip--muted" id="dash-updated" aria-live="polite">Syncing…</span>
+    </div>
+  </header>
+
+  <section class="dash-hero" aria-labelledby="dash-summary-heading">
+    <div class="dash-hero__index">
+      <div class="score-dial-wrap">
+        <div class="score-dial score-dial--low dash-hero__dial" id="overview-score-dial" aria-live="polite">
+          <svg class="score-dial__svg" viewBox="0 0 120 120" aria-hidden="true">
+            <g transform="rotate(-90 60 60)">
+              <circle class="score-dial__track" cx="60" cy="60" r="44" fill="none" stroke-width="7" />
+              <circle class="score-dial__arc" cx="60" cy="60" r="44" fill="none" stroke-width="7" stroke-linecap="round" />
+            </g>
+          </svg>
+          <div class="score-dial__inner">
+            <span class="score-dial__value" id="threat-score-num">—</span>
+            <span class="score-dial__denom">/ 100</span>
+            <span class="score-dial__label">Risk score</span>
+          </div>
+        </div>
+        <div class="score-dial-meta dash-hero__meta">
+          <div id="threat-badge-wrap" class="score-dial-meta__badge"></div>
+          <p class="score-dial-meta__caption dash-hero__caption">Planning aid only — always follow NWS and your county.</p>
+        </div>
+      </div>
+    </div>
+    <div class="dash-hero__summary">
+      <h2 class="dash-summary-heading" id="dash-summary-heading">Summary</h2>
+      <p class="dash-summary-line" id="decision-headline">Loading snapshot…</p>
+      <ul class="dash-summary-list" id="decision-bullets" aria-label="Key points"></ul>
+      <p class="dash-tds-inline muted" id="tds-live-inner" hidden aria-live="polite"></p>
+    </div>
+  </section>
+
+  <section class="dash-section" aria-labelledby="dash-metrics-title">
+    <div class="dash-section__head">
+      <h2 class="dash-section__title" id="dash-metrics-title">At a glance</h2>
+      <p class="dash-section__hint">Four quick checks — tap a topic under “Learn more” for tables.</p>
+    </div>
+    <div class="dash-metrics" id="priority-grid" role="list"></div>
+  </section>
+
+  <section class="dash-section dash-section--explore" aria-labelledby="dash-explore-title">
+    <div class="dash-section__head">
+      <h2 class="dash-section__title" id="dash-explore-title">Learn more</h2>
+      <p class="dash-section__hint">Choose one topic. We’ll show only that section so the page stays easy to read. For the full summation formula (technical), see <a href="{{ url_for('how_scores_page') }}">How scores work</a>.</p>
+    </div>
+    <div class="dash-explore-card">
+      <label class="dash-select-label" for="dash-detail-select">Show me…</label>
+      <select id="dash-detail-select" class="dash-select" autocomplete="off">
+        <option value="" selected>Pick a topic…</option>
+        <option value="alerts">Weather alerts &amp; rain chances</option>
+        <option value="coastal">Bay water &amp; seas</option>
+        <option value="weather">Rain &amp; wind (forecast)</option>
+        <option value="rivers">Rivers &amp; creek levels</option>
+        <option value="terrain">Ground height at this spot</option>
+        <option value="tds">How your risk score works</option>
+      </select>
+      <p class="dash-detail-placeholder muted" id="dash-detail-placeholder">↑ Select a topic to see details.</p>
+      <div id="dash-detail-viewport" class="dash-detail-viewport" hidden>
+        <div id="dash-detail-gauge" class="dash-detail-gauge" hidden aria-live="polite"></div>
+        <article id="dash-panel-alerts" class="dash-detail-panel" hidden>
+          <h3 class="dash-detail-panel__title">Weather alerts &amp; rain chances</h3>
+          <p class="dash-detail-panel__lead">What the National Weather Service has out for this area, plus how likely rain looks in the next day.</p>
+          <table class="digest digest--dash">
+            <tbody id="detail-alerts-body"></tbody>
+          </table>
+        </article>
+        <article id="dash-panel-coastal" class="dash-detail-panel" hidden>
+          <h3 class="dash-detail-panel__title">Bay water &amp; seas</h3>
+          <p class="dash-detail-panel__lead">Tide height compared to a recent average, plus nearby sea state if available.</p>
+          <table class="digest digest--dash">
+            <tbody id="detail-coastal-body"></tbody>
+          </table>
+        </article>
+        <article id="dash-panel-weather" class="dash-detail-panel" hidden>
+          <h3 class="dash-detail-panel__title">Rain &amp; wind (forecast)</h3>
+          <p class="dash-detail-panel__lead">Short-range rain totals and peak gusts from blended weather models.</p>
+          <table class="digest digest--dash">
+            <tbody id="detail-weather-body"></tbody>
+          </table>
+        </article>
+        <article id="dash-panel-rivers" class="dash-detail-panel" hidden>
+          <h3 class="dash-detail-panel__title">Rivers &amp; creek levels</h3>
+          <p class="dash-detail-panel__lead">River gauges near the reference point — useful for inland flooding context.</p>
+          <table class="digest digest--dash">
+            <tbody id="detail-rivers-body"></tbody>
+          </table>
+        </article>
+        <article id="dash-panel-terrain" class="dash-detail-panel" hidden>
+          <h3 class="dash-detail-panel__title">Ground height</h3>
+          <p class="dash-detail-panel__lead">Approximate elevation at this location (lower areas can be more exposed to surge and ponding).</p>
+          <table class="digest digest--dash">
+            <tbody id="detail-terrain-body"></tbody>
+          </table>
+        </article>
+        <article id="dash-panel-tds" class="dash-detail-panel dash-detail-panel--tds" hidden>
+          <h3 class="dash-detail-panel__title">How your risk score works</h3>
+          <p class="dash-detail-panel__lead">Plain-language version: we combine water, wind, inland flood signals, and nearby road trouble, then adjust if an evacuation zone applies. This is <strong>not</strong> a forecast and <strong>not</strong> an evacuation order.</p>
+          <details class="dash-math-fold">
+            <summary class="dash-math-fold__summary">Show the math (optional)</summary>
+            <div class="dash-math-fold__body">
+              <p class="tds-banner__equation tds-banner__equation--compact" aria-label="TDS equation">
+                <span class="tds-banner__math">Risk score = min</span><span class="tds-banner__paren">(</span>100,
+                <span class="tds-banner__paren">(</span>Σ<sub class="tds-sub">i</sub> <span class="tds-banner__it">w<sub class="tds-sub">i</sub></span> · <span class="tds-banner__it">s<sub class="tds-sub">i</sub></span>²<span class="tds-banner__paren">)</span> · <span class="tds-banner__it">Z</span><span class="tds-banner__paren">)</span>
+              </p>
+              <p class="tds-methodology-eq" id="tds-equation-inline"></p>
+            </div>
+          </details>
+          <div class="tds-methodology-paras" id="tds-methodology-paras"></div>
+          <p class="disclaimer" id="threat-disclaimer"></p>
+          <h4 class="dash-detail-subhead">What drove this number</h4>
+          <ul class="threat-reasons" id="threat-reasons"></ul>
+          <h4 class="dash-detail-subhead">Parts of the score</h4>
+          <ul class="comp-list" id="threat-components"></ul>
+          <h4 class="dash-detail-subhead">Hazard strength (0–10 scale)</h4>
+          <table class="digest digest--dash">
+            <thead>
+              <tr>
+                <th scope="col">Hazard</th>
+                <th scope="col">Strength</th>
+                <th scope="col">Weight</th>
+                <th scope="col">Impact</th>
+              </tr>
+            </thead>
+            <tbody id="tds-subscores-body"></tbody>
+          </table>
+        </article>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/app.js') }}" type="module"></script>
+{% endblock %}

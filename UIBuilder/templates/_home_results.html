@@ -1,0 +1,163 @@
+{# Shared home assessment UI: workflow page hides until first run; snapshot page shows immediately. #}
+<div id="homes-results" class="homes-results"{% if home_results_initially_hidden %} hidden{% endif %}>
+    <section class="dash-hero homes-dash-hero homes-dash-hero--compact" aria-labelledby="homes-summary-heading">
+      <div class="dash-hero__index">
+        <div class="score-dial-wrap">
+          <div class="score-dial score-dial--low dash-hero__dial" id="home-score-dial" aria-live="polite">
+            <svg class="score-dial__svg" viewBox="0 0 120 120" aria-hidden="true">
+              <g transform="rotate(-90 60 60)">
+                <circle class="score-dial__track" cx="60" cy="60" r="44" fill="none" stroke-width="7" />
+                <circle class="score-dial__arc" cx="60" cy="60" r="44" fill="none" stroke-width="7" stroke-linecap="round" />
+              </g>
+            </svg>
+            <div class="score-dial__inner">
+              <span class="score-dial__value" id="home-threat-num">—</span>
+              <span class="score-dial__denom">/ 100</span>
+              <span class="score-dial__label">Risk score</span>
+            </div>
+          </div>
+          <div class="score-dial-meta dash-hero__meta">
+            <div id="home-threat-badge" class="score-dial-meta__badge"></div>
+            <p class="score-dial-meta__caption dash-hero__caption">Not an evacuation order — always follow your county.</p>
+          </div>
+        </div>
+      </div>
+      <div class="dash-hero__summary">
+        <h2 class="dash-summary-heading" id="homes-summary-heading">This address</h2>
+        <p class="dash-summary-line homes-loc-line" id="home-loc-line"></p>
+        <ul class="dash-summary-list" id="home-reasons"></ul>
+        <p class="homes-tds-live muted" id="home-tds-live-inner" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <div class="homes-share-row">
+      <button type="button" class="btn btn--sm btn--primary" id="btn-download-share-report" aria-label="Download a one-page HTML report to share">
+        Download report to share
+      </button>
+      <p class="homes-share-row__hint muted">Single-page HTML — same look as here, shortened for family (email or save on phone).</p>
+    </div>
+
+    <section class="dash-section dash-section--explore homes-explore" aria-labelledby="home-explore-title">
+      <div class="dash-section__head">
+        <h2 class="dash-section__title" id="home-explore-title">Details</h2>
+        <p class="dash-section__hint">Pick one topic — same flow as the <a href="{{ url_for('dashboard_page') }}">dashboard</a>.</p>
+      </div>
+      <div class="dash-explore-card homes-explore-card">
+        <label class="dash-select-label" for="home-detail-select">Show me…</label>
+        <select id="home-detail-select" class="dash-select" autocomplete="off">
+          <option value="" selected>Pick a topic…</option>
+          <option value="alerts">Weather alerts &amp; rain chances</option>
+          <option value="coastal">Bay water &amp; seas</option>
+          <option value="weather">Rain &amp; wind (forecast)</option>
+          <option value="rivers">Rivers &amp; creek levels</option>
+          <option value="terrain">Ground height at this spot</option>
+          <option value="tds">How your risk score works</option>
+          <option value="evac">Evacuation zone</option>
+          <option value="traffic">Nearby traffic &amp; route check</option>
+          <option value="local">ZIP &amp; regional context</option>
+        </select>
+        <p class="dash-detail-placeholder muted" id="home-detail-placeholder">↑ Select a topic.</p>
+        <div id="home-detail-viewport" class="dash-detail-viewport" hidden>
+          <div id="home-detail-gauge" class="dash-detail-gauge" hidden aria-live="polite"></div>
+
+          <article id="home-panel-alerts" class="dash-detail-panel" hidden>
+            <h3 class="dash-detail-panel__title">Weather alerts &amp; rain chances</h3>
+            <p class="dash-detail-panel__lead">What the National Weather Service has out for this area, plus how likely rain looks in the next day.</p>
+            <table class="digest digest--dash">
+              <tbody id="home-detail-alerts-body"></tbody>
+            </table>
+          </article>
+          <article id="home-panel-coastal" class="dash-detail-panel" hidden>
+            <h3 class="dash-detail-panel__title">Bay water &amp; seas</h3>
+            <p class="dash-detail-panel__lead">Tide height compared to a recent average, plus nearby sea state if available.</p>
+            <table class="digest digest--dash">
+              <tbody id="home-detail-coastal-body"></tbody>
+            </table>
+          </article>
+          <article id="home-panel-weather" class="dash-detail-panel" hidden>
+            <h3 class="dash-detail-panel__title">Rain &amp; wind (forecast)</h3>
+            <p class="dash-detail-panel__lead">Short-range rain totals and peak gusts from blended weather models.</p>
+            <table class="digest digest--dash">
+              <tbody id="home-detail-weather-body"></tbody>
+            </table>
+          </article>
+          <article id="home-panel-rivers" class="dash-detail-panel" hidden>
+            <h3 class="dash-detail-panel__title">Rivers &amp; creek levels</h3>
+            <p class="dash-detail-panel__lead">River gauges near the reference point — useful for inland flooding context.</p>
+            <table class="digest digest--dash">
+              <tbody id="home-detail-rivers-body"></tbody>
+            </table>
+          </article>
+          <article id="home-panel-terrain" class="dash-detail-panel" hidden>
+            <h3 class="dash-detail-panel__title">Ground height</h3>
+            <p class="dash-detail-panel__lead">Approximate elevation at this location (lower areas can be more exposed to surge and ponding).</p>
+            <table class="digest digest--dash">
+              <tbody id="home-detail-terrain-body"></tbody>
+            </table>
+          </article>
+          <article id="home-panel-tds" class="dash-detail-panel dash-detail-panel--tds" hidden>
+            <h3 class="dash-detail-panel__title">How your risk score works</h3>
+            <p class="dash-detail-panel__lead">We combine water, wind, inland flood signals, and nearby road trouble, then adjust if an evacuation zone applies. <strong>Not</strong> a forecast and <strong>not</strong> an evacuation order.</p>
+            <p class="tds-methodology-eq" id="home-tds-equation-inline"></p>
+            <div class="tds-methodology-paras" id="home-tds-methodology-paras"></div>
+            <p class="disclaimer" id="home-tds-disclaimer"></p>
+            <h4 class="dash-detail-subhead">What drove this number</h4>
+            <ul class="threat-reasons" id="home-tds-reasons"></ul>
+            <h4 class="dash-detail-subhead">Parts of the score</h4>
+            <ul class="comp-list" id="home-tds-components"></ul>
+            <h4 class="dash-detail-subhead">Hazard strength (0–10 scale)</h4>
+            <table class="digest digest--dash">
+              <thead>
+                <tr>
+                  <th scope="col">Hazard</th>
+                  <th scope="col">Strength</th>
+                  <th scope="col">Weight</th>
+                  <th scope="col">Impact</th>
+                </tr>
+              </thead>
+              <tbody id="home-tds-subscores-body"></tbody>
+            </table>
+          </article>
+          <article id="home-panel-evac" class="dash-detail-panel" hidden>
+            <h3 class="dash-detail-panel__title">Evacuation zone</h3>
+            <p class="dash-detail-panel__lead">We check the county map first, then the statewide map if needed.</p>
+            <div id="home-evac-root" class="home-evac-root"></div>
+          </article>
+          <article id="home-panel-traffic" class="dash-detail-panel" hidden>
+            <h3 class="dash-detail-panel__title">Nearby traffic &amp; route check</h3>
+            <p class="dash-detail-panel__lead">
+              This app pulls <strong>FDOT ArcGIS</strong> layers (FL511 + FHP) near your pin. For the statewide map and official closures, use
+              <a href="https://www.fl511.com" target="_blank" rel="noopener noreferrer">FL511</a> and
+              <a href="https://www.flhsmv.gov/fhp/traffic/" target="_blank" rel="noopener noreferrer">FHP traffic</a>.
+              Optional APIs such as TomTom incidents or OpenRouteService directions are listed in <code class="homes-inline-code">GET /api/endpoints</code> for developers — not wired into scores here.
+            </p>
+            <div id="home-traffic-root" class="home-traffic-root"></div>
+            <div class="homes-traffic-route homes-traffic-route--in-panel" aria-labelledby="homes-route-title">
+              <h4 class="homes-traffic-route__title" id="homes-route-title">Drive time to a destination</h4>
+              <p class="homes-traffic-route__hint">City or full address. Suggestions help geocode the right end point.</p>
+              <form id="traffic-route-form" class="homes-traffic-route__form">
+                <label class="homes-label" for="traffic-dest">Destination</label>
+                <div class="homes-traffic-route__row">
+                  <input class="homes-input" type="text" id="traffic-dest" name="destination" placeholder="e.g. Orlando FL" autocomplete="off" />
+                  <button type="submit" class="btn btn--primary" id="btn-traffic-route" disabled>Estimate drive</button>
+                </div>
+              </form>
+              <div class="homes-traffic-route__result" id="home-route-result" hidden aria-live="polite"></div>
+            </div>
+          </article>
+          <article id="home-panel-local" class="dash-detail-panel" hidden>
+            <h3 class="dash-detail-panel__title">ZIP &amp; regional context</h3>
+            <p class="dash-detail-panel__lead">Metro reference data plus regional power and traffic — verify with official sources.</p>
+            <h4 class="dash-detail-subhead">ZIP &amp; planning notes</h4>
+            <div class="homes-detail-panel__table-wrap">
+              <table class="digest digest--dash"><tbody id="home-zip-block"></tbody></table>
+            </div>
+            <h4 class="dash-detail-subhead">Power &amp; region</h4>
+            <div class="homes-detail-panel__table-wrap">
+              <table class="digest digest--dash"><tbody id="home-infra-block"></tbody></table>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+  </div>
