@@ -4,9 +4,12 @@ Hurricane Hub — Flask prototype: aggregated public APIs for Tampa Bay flood / 
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from functools import wraps
 from urllib.parse import quote, urlparse
@@ -18,9 +21,11 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     session,
     url_for,
 )
+from fpdf import FPDF
 
 from services.apis import (
     DEFAULT_LAT,
@@ -609,6 +614,210 @@ def api_report():
     data = aggregate_dashboard(lat=lat, lon=lon, verbose=verbose)
     text = strip_internal_api_refs(data.get("detailed_report") or "")
     return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+# ---------------------------------------------------------------------------
+# PDF helpers
+# ---------------------------------------------------------------------------
+
+def _fpdf_safe(s: str) -> str:
+    """PyFPDF 1.x encodes page text as Latin-1 internally; drop unsupported code points."""
+    return s.encode("latin-1", errors="replace").decode("latin-1")
+
+
+def _pdf_text(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return str(value)
+
+
+def _render_assessment_pdf(assessment: dict) -> bytes:
+    geo = assessment.get("geocode") or {}
+    risk = assessment.get("risk_card") or {}
+    dash = assessment.get("dashboard") or {}
+    zip_info = assessment.get("zip_database_match") or {}
+
+    address = _pdf_text(geo.get("display_name") or assessment.get("address") or "Selected location")
+    score = _pdf_text(risk.get("threat_score") or dash.get("threat", {}).get("score"))
+    tier = _pdf_text(risk.get("threat_tier") or dash.get("threat", {}).get("tier"))
+    evacuation = _pdf_text(risk.get("evacuation_level"))
+    county_url = _pdf_text(zip_info.get("county_emergency_url"))
+    power_polygons = _pdf_text(risk.get("power_outage_polygons_in_bbox"))
+    fl511_hits = _pdf_text(risk.get("fl511_incident_layers_total"))
+    matched_zip = _pdf_text(assessment.get("matched_zip") or zip_info.get("zip") or zip_info.get("zip_code"))
+    city = _pdf_text(zip_info.get("city"))
+    county = _pdf_text(zip_info.get("county"))
+
+    reasons = risk.get("threat_reasons") or dash.get("threat", {}).get("reasons") or []
+    recommendations = [str(r) for r in reasons[:5]] if reasons else ["No strong signals in this run."]
+
+    generated_at = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(False)
+
+    pdf.set_fill_color(10, 41, 104)
+    pdf.rect(0, 0, 210, 32, "F")
+    pdf.set_fill_color(0, 102, 204)
+    pdf.rect(0, 32, 210, 4, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Arial", "B", 16)
+    pdf.set_xy(12, 9)
+    pdf.cell(0, 8, _fpdf_safe("HURRICANE HUB REPORT"), ln=1)
+    pdf.set_font("Arial", "", 10)
+    pdf.set_xy(12, 18)
+    pdf.cell(0, 6, _fpdf_safe("Home risk assessment"), ln=1)
+    pdf.set_font("Arial", "", 9)
+    pdf.set_xy(12, 24)
+    pdf.cell(0, 5, _fpdf_safe("Tampa metro flood + storm context"), ln=1)
+
+    pdf.ln(12)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 7, _fpdf_safe("Report details"), ln=1)
+    pdf.ln(1)
+    pdf.set_draw_color(10, 41, 104)
+    pdf.set_line_width(0.5)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 6, _fpdf_safe(f"Address: {address}"), border=0)
+    pdf.multi_cell(0, 6, _fpdf_safe(f"Report date: {generated_at}"), border=0)
+    pdf.ln(2)
+
+    summary = [
+        ("Threat score", score),
+        ("Threat tier", tier),
+        ("Matched ZIP", matched_zip),
+        ("City", city),
+        ("County", county),
+        ("Evacuation zone", evacuation),
+        ("Power outage polygons", power_polygons),
+        ("FL511 layer hits", fl511_hits),
+    ]
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 7, _fpdf_safe("Assessment summary"), ln=1)
+    pdf.ln(1)
+    summary_start_y = pdf.get_y()
+
+    ring_thickness = 8
+    risk_circle_size = 32
+    risk_circle_x = 150
+    risk_circle_y = pdf.get_y() + risk_circle_size
+
+    pdf.set_draw_color(230, 230, 230)
+    pdf.set_line_width(ring_thickness)
+    pdf.ellipse(
+        risk_circle_x - risk_circle_size,
+        risk_circle_y - risk_circle_size,
+        risk_circle_size * 2,
+        risk_circle_size * 2,
+    )
+
+    score_value = 0
+    try:
+        score_value = min(max(int(float(score)), 0), 100)
+    except (TypeError, ValueError):
+        score_value = 0
+
+    if score_value > 0:
+        filled_angle = score_value * 3.6
+        steps = max(40, int(filled_angle / 3) + 1)
+        points = []
+        for step in range(steps + 1):
+            angle = math.radians(-90 + filled_angle * step / steps)
+            x = risk_circle_x + risk_circle_size * math.cos(angle)
+            y = risk_circle_y + risk_circle_size * math.sin(angle)
+            points.append((x, y))
+
+        pdf.set_draw_color(10, 41, 104)
+        pdf.set_line_width(ring_thickness)
+        for i in range(len(points) - 1):
+            x1, y1 = points[i]
+            x2, y2 = points[i + 1]
+            pdf.line(x1, y1, x2, y2)
+
+    pdf.set_font("Arial", "B", 16)
+    pdf.set_text_color(10, 41, 104)
+    pdf.set_xy(risk_circle_x - risk_circle_size, risk_circle_y - 5)
+    pdf.cell(risk_circle_size * 2, 8, _fpdf_safe(score), border=0, align="C")
+    pdf.set_font("Arial", "", 10)
+    pdf.set_text_color(10, 41, 104)
+    pdf.set_xy(risk_circle_x - risk_circle_size, risk_circle_y + 4)
+    pdf.cell(risk_circle_size * 2, 5, _fpdf_safe("Risk score"), border=0, align="C")
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_xy(15, summary_start_y)
+
+    pdf.set_left_margin(15)
+    pdf.set_right_margin(15)
+    pdf.set_font("Arial", "", 9)
+    for label, value in summary:
+        pdf.set_font("Arial", "B", 9)
+        pdf.set_text_color(10, 41, 104)
+        pdf.cell(40, 5, _fpdf_safe(f"{label}: "), border=0, ln=0)
+        pdf.set_font("Arial", "", 9)
+        pdf.set_text_color(0, 0, 0)
+        pdf.multi_cell(0, 5, _fpdf_safe(value), border=0, align="L")
+        pdf.ln(1)
+        pdf.set_x(15)
+
+    pdf.set_xy(15, max(pdf.get_y(), risk_circle_y + risk_circle_size) + 8)
+    pdf.set_text_color(10, 41, 104)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 7, _fpdf_safe("Recommendations"), ln=1)
+    pdf.ln(2)
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Arial", "", 10)
+    for item in recommendations:
+        pdf.multi_cell(0, 6, _fpdf_safe(f"- {item}"), border=0)
+        pdf.ln(1)
+
+    url_block_top = pdf.h - 42
+    if pdf.get_y() < url_block_top:
+        pdf.set_y(url_block_top)
+
+    pdf.set_font("Arial", "B", 10)
+    pdf.cell(0, 5, _fpdf_safe("County emergency URL:"), border=0, ln=1)
+    pdf.set_text_color(0, 102, 204)
+    pdf.set_font("Arial", "U", 9)
+    pdf.multi_cell(0, 5, _fpdf_safe(county_url), border=0, align="L")
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Arial", "", 10)
+
+    footer_y = pdf.h - 18
+    if pdf.get_y() < footer_y:
+        pdf.set_y(footer_y)
+
+    pdf.set_font("Arial", "I", 9)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(0, 6, _fpdf_safe("Hurricane Hub — public-data prototype for Tampa Bay."), ln=1, align="C")
+    pdf.cell(0, 6, _fpdf_safe(generated_at), ln=1, align="C")
+
+    return pdf.output(dest="S").encode("latin-1", errors="replace")
+
+
+@app.route("/api/report/pdf", methods=["POST"])
+@login_required
+def api_report_pdf():
+    payload = request.get_json(silent=True) or {}
+    assessment = payload.get("assessment")
+    if not isinstance(assessment, dict):
+        return jsonify({"error": "assessment payload required"}), 400
+    pdf_bytes = _render_assessment_pdf(assessment)
+    return send_file(
+        BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="hurricane-hub-report.pdf",
+    )
 
 
 @app.route("/api/geocode")

@@ -1121,12 +1121,29 @@ if (readSnapshotAssessment()) {
   bootWorkflowPage();
 }
 
-document.body.addEventListener("click", (e) => {
+document.body.addEventListener("click", async (e) => {
   const t = e.target.closest("#btn-download-share-report");
   if (!t) return;
   e.preventDefault();
-  if (!lastAssessment) return;
-  downloadShareReport(lastAssessment);
+  const addr = document.getElementById("addr")?.value?.trim() || "";
+  const st = document.getElementById("form-status");
+  if (addr.length < 4) {
+    if (st) st.textContent = "Enter an address or ZIP first, then try again.";
+    document.getElementById("addr")?.focus();
+    return;
+  }
+  if (st) st.textContent = "";
+  setLoading(true);
+  try {
+    const data = await postAssess(addr);
+    renderAssessment(data);
+    await downloadShareReport(data);
+    if (st) st.textContent = "Done.";
+  } catch (err) {
+    if (st) st.textContent = err.message || String(err);
+  } finally {
+    setLoading(false);
+  }
 });
 
 window.__hurricaneHubAssistantContext = () => {
