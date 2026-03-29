@@ -348,7 +348,8 @@ function setLoading(on) {
   const el = document.getElementById("homes-loading");
   const btn = document.getElementById("btn-assess");
   const saveBtn = document.getElementById("btn-save");
-  if (!el && !btn && !saveBtn) return;
+  const downloadBtn = document.getElementById("btn-download-pdf");
+  if (!el && !btn && !saveBtn && !downloadBtn) return;
   if (el) {
     el.hidden = !on;
     el.setAttribute("aria-hidden", on ? "false" : "true");
@@ -356,6 +357,7 @@ function setLoading(on) {
   }
   if (btn) btn.disabled = on;
   if (saveBtn) saveBtn.disabled = on;
+  if (downloadBtn) downloadBtn.disabled = on;
 }
 
 function humanMatchMethod(m) {
@@ -989,6 +991,46 @@ function bootWorkflowPage() {
     try {
       const data = await postSave(nick, addr);
       window.location.href = `/homes/${data.id}`;
+    } catch (err) {
+      if (st) st.textContent = err.message || String(err);
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  document.getElementById("btn-download-pdf")?.addEventListener("click", async () => {
+    const addr = document.getElementById("addr")?.value?.trim() || "";
+    const st = document.getElementById("form-status");
+    if (addr.length < 4) {
+      if (st) st.textContent = "Enter an address first.";
+      return;
+    }
+    if (st) st.textContent = "Preparing PDF…";
+    setLoading(true);
+    try {
+      const url = `/api/assessment/home/pdf?address=${encodeURIComponent(addr)}`;
+      const res = await fetch(url, { ...FETCH_OPTS });
+      if (res.status === 401) {
+        const data = await res.json().catch(() => ({}));
+        window.location.href = data.login_url || `/login?next=${encodeURIComponent(window.location.pathname)}`;
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error || res.statusText || "PDF download failed");
+      }
+      const blob = await res.blob();
+      const filename = `hurricane-hub-${addr.replace(/[^a-zA-Z0-9]+/g, "-").replace(/-+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40)}.pdf`;
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename || "hurricane-hub-report.pdf";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(blobUrl);
+      if (st) st.textContent = "PDF downloaded.";
     } catch (err) {
       if (st) st.textContent = err.message || String(err);
     } finally {
