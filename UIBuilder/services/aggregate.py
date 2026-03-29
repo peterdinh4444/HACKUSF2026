@@ -3,6 +3,7 @@ Build unified metrics + threat score from raw source payloads.
 """
 from __future__ import annotations
 
+import math
 import statistics
 from typing import Any
 
@@ -307,9 +308,10 @@ def build_detailed_report(metrics: dict[str, Any], threat: dict[str, Any]) -> st
     """Human-readable narrative for demos / PDFs — not operational guidance."""
     lines: list[str] = []
     q = metrics.get("query") or {}
+    model = threat.get("model") or "heuristic"
     lines.append(
         f"Hurricane Hub — situation summary for {q.get('latitude', '?')}, {q.get('longitude', '?')} "
-        f"(WGS84). Threat index {threat.get('score')} / 100 ({threat.get('tier')})."
+        f"(WGS84). Threat index {threat.get('score')} / 100 ({threat.get('tier')}); model {model}."
     )
     lines.append("")
 
@@ -382,6 +384,270 @@ def build_detailed_report(metrics: dict[str, Any], threat: dict[str, Any]) -> st
     lines.append("")
     lines.append(threat.get("disclaimer", ""))
     return "\n".join(lines)
+
+
+def _sigmoid_subscore_0_10(x: float, m: float, k: float) -> float:
+    """
+    Map a physical input x to 0–10 using a logistic (S) curve centered at m with steepness k.
+    Higher k → sharper transition around the inflection m.
+    """
+    try:
+        t = -k * (x - m)
+        if t > 40:
+            s = 0.0
+        elif t < -40:
+            s = 10.0
+        else:
+            s = 10.0 / (1.0 + math.exp(t))
+    except (OverflowError, ValueError):
+        s = 5.0
+    return max(0.0, min(10.0, s))
+
+
+def _extract_evac_letter(evac: dict[str, Any] | None) -> str:
+    if not evac:
+        return ""
+    raw = evac.get("raw") if isinstance(evac.get("raw"), dict) else {}
+    for key in ("EVAC_LEVEL", "EZone", "evac_level", "evac_zone"):
+        v = evac.get(key) if key in ("evac_level", "evac_zone") else raw.get(key)
+        if v is None:
+            continue
+        s = str(v).strip().upper()
+        for ch in s:
+            if ch in "ABCDE":
+                return ch
+    return ""
+
+
+def evacuation_vulnerability_multiplier(evac: dict[str, Any] | None) -> tuple[float, str, str]:
+    """
+    Zone multiplier Z: encodes GIS evacuation letter (Hillsborough A–E or EOC EZone).
+    Letters D/E and unknown matched polygons get modest elevation over non-evac baseline.
+    """
+    if not evac or not evac.get("source"):
+        return 1.0, "—", "No evacuation polygon matched at this coordinate; Z = 1.0 (neutral)."
+    letter = _extract_evac_letter(evac)
+    z_map = {
+        "A": (1.5, "Zone A — highest ordered-evacuation tier in this schema"),
+        "B": (1.3, "Zone B"),
+        "C": (1.1, "Zone C"),
+        "D": (1.05, "Zone D"),
+        "E": (1.0, "Zone E"),
+    }
+    if letter in z_map:
+        z, desc = z_map[letter]
+        return z, letter, desc
+    return 1.08, letter or "?", "Matched evacuation feature without A–E letter — Z = 1.08 (slight uplift)."
+
+
+def compute_true_threat_detection_score(
+    metrics: dict[str, Any],
+    evacuation: dict[str, Any] | None = None,
+    traffic_near: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    True Threat Detection Score (TDS): weighted non-linear index (0–100).
+
+    TDS = min(100, (Σᵢ wᵢ · sᵢ²) · Z)
+
+    Each sᵢ ∈ [0, 10] is a sigmoid-normalized sub-score. Squaring ensures a single
+    extreme hazard dominates the sum. Z scales vulnerability from official evacuation GIS.
+
+    This is a research-style composite for prioritization — not a forecast and not
+    a substitute for NWS products or county evacuation orders.
+    """
+    coast = metrics.get("coastal") or {}
+    anom = coast.get("water_level_anomaly_ft")
+    latest = coast.get("water_level_ft_mllw_latest")
+    x_surge = 0.0
+    if anom is not None:
+        try:
+            x_surge = max(x_surge, float(anom))
+        except (TypeError, ValueError):
+            pass
+    if latest is not None:
+        try:
+            lf = float(latest)
+            x_surge = max(x_surge, max(0.0, lf - 2.5) * 0.35)
+        except (TypeError, ValueError):
+            pass
+    if x_surge <= 0 and anom is None and latest is None:
+        x_surge = 0.0
+    s_surge = _sigmoid_subscore_0_10(x_surge, m=1.15, k=1.35)
+    if anom is None and latest is None:
+        s_surge = min(s_surge, 3.5)
+
+    atm = metrics.get("atmosphere_forecast") or {}
+    ost = metrics.get("official_short_term") or {}
+    surf = metrics.get("surface_obs") or {}
+    gust_om = float(atm.get("max_wind_gust_mph_24h_open_meteo") or 0)
+    gust_nws = float(ost.get("max_wind_gust_mph_24h_nws") or 0)
+    gust_surf = float(surf.get("wind_gust_mph") or 0)
+    coops_gust_kt = coast.get("coops_max_gust_kt")
+    coops_mph = float(coops_gust_kt) * 1.15078 if coops_gust_kt is not None else 0.0
+    x_wind = max(gust_om, gust_nws, gust_surf, coops_mph)
+    trop = metrics.get("tropical") or {}
+    n_named = int(trop.get("nhc_named_storms") or 0)
+    x_wind += min(25.0, n_named * 8.0)
+    al = metrics.get("alerts") or {}
+    if al.get("has_high_severity"):
+        x_wind += 12.0
+    s_wind = _sigmoid_subscore_0_10(x_wind, m=74.0, k=0.085)
+
+    fl = (al.get("flood") or {})
+    flood_n = float(fl.get("flood_related_count") or 0)
+    if fl.get("flood_has_severe"):
+        flood_n += 2.0
+    rivers = metrics.get("rivers") or {}
+    max_stage = 0.0
+    for _sid, info in rivers.items():
+        if not isinstance(info, dict):
+            continue
+        gh = (info.get("latest") or {}).get("gage_height_ft")
+        if gh is not None:
+            try:
+                max_stage = max(max_stage, float(gh))
+            except (TypeError, ValueError):
+                pass
+    rain48 = float(atm.get("precip_in_next_48h") or 0)
+    x_inland = flood_n * 2.2 + max_stage / 6.5 + rain48 * 1.8
+    s_inland = _sigmoid_subscore_0_10(x_inland, m=4.0, k=0.28)
+
+    totals = (traffic_near or {}).get("totals_by_layer") or {}
+    n_close = int(totals.get("fhp_closures") or 0)
+    n_close += int(0.55 * float(totals.get("fhp_crashes") or 0))
+    n_close += int(0.35 * float(totals.get("fl511_congestion") or 0))
+    x_iso = float(n_close)
+    s_isolation = _sigmoid_subscore_0_10(x_iso, m=1.0, k=0.75)
+
+    w_surge = 0.42
+    w_wind = 0.28
+    w_inland = 0.14
+    w_iso = 0.10
+
+    c_surge = w_surge * (s_surge**2)
+    c_wind = w_wind * (s_wind**2)
+    c_inland = w_inland * (s_inland**2)
+    c_iso = w_iso * (s_isolation**2)
+
+    z, z_letter, z_explain = evacuation_vulnerability_multiplier(evacuation)
+    inner = c_surge + c_wind + c_inland + c_iso
+    raw = inner * z
+    score = max(0.0, min(100.0, raw))
+
+    tier = "low"
+    if score >= 70:
+        tier = "extreme"
+    elif score >= 45:
+        tier = "high"
+    elif score >= 25:
+        tier = "elevated"
+
+    subscores = [
+        {
+            "id": "storm_surge_coastal",
+            "label": "Coastal water / surge proxy",
+            "weight": w_surge,
+            "s": round(s_surge, 2),
+            "x_input": round(x_surge, 3),
+            "contribution": round(c_surge, 2),
+            "detail": "NOAA CO-OPS anomaly + level vs baseline; not SLOSH.",
+        },
+        {
+            "id": "wind",
+            "label": "Wind (gusts + synoptic context)",
+            "weight": w_wind,
+            "s": round(s_wind, 2),
+            "x_input": round(x_wind, 2),
+            "contribution": round(c_wind, 2),
+            "detail": "NWS hourly / Open-Meteo / ASOS + NHC named systems + alert severity nudge.",
+        },
+        {
+            "id": "inland_flood",
+            "label": "Inland flood drivers",
+            "weight": w_inland,
+            "s": round(s_inland, 2),
+            "x_input": round(x_inland, 2),
+            "contribution": round(c_inland, 2),
+            "detail": "NWS flood-tagged alerts, USGS stage, model rain (48h).",
+        },
+        {
+            "id": "isolation_routes",
+            "label": "Route friction (FHP / FL511 near pin)",
+            "weight": w_iso,
+            "s": round(s_isolation, 2),
+            "x_input": round(x_iso, 2),
+            "contribution": round(c_iso, 2),
+            "detail": "Counts of closures/crashes/congestion within buffer — not bridge wind gates.",
+        },
+    ]
+
+    components = [
+        {
+            "id": s["id"],
+            "points": round(float(s["contribution"]), 2),
+            "detail": f"{s['label']}: strength {s['s']}/10, impact {s['contribution']}",
+        }
+        for s in sorted(subscores, key=lambda u: -u["contribution"])
+    ]
+    components.append(
+        {
+            "id": "evac_zone_Z",
+            "points": round(z, 3),
+            "detail": f"Evacuation zone factor: {z} — {z_explain}",
+        }
+    )
+
+    reasons = [
+        f"Combined hazard index before zone factor: {round(inner, 2)}; zone factor {z} → score {round(score, 1)}",
+        f"Evacuation zone on map: {z_letter} — {z_explain}",
+    ]
+    for s in sorted(subscores, key=lambda u: -u["contribution"]):
+        if s["contribution"] >= 1.0:
+            reasons.append(f"{s['label']}: strength {s['s']}/10 (impact {s['contribution']})")
+
+    disclaimer = (
+        "The True Threat Detection Score (TDS) is an experimental composite for situational awareness only. "
+        "It is not a deterministic flood or surge forecast, not engineering advice, and not a replacement for "
+        "National Weather Service warnings, county evacuation orders, or FL511. Model inputs are incomplete, "
+        "delayed, and location-specific; errors and omissions are expected."
+    )
+
+    methodology = {
+        "title": "How we make the True Threat Detection Score (TDS)",
+        "equation": "TDS = min(100, (Σᵢ wᵢ · sᵢ²) · Z)",
+        "paragraphs": [
+            "Instead of adding independent hazard points, we use a weighted sum of squared sub-scores. "
+            "Squaring means one hazard approaching its upper range dominates the aggregate — consistent with "
+            "disaster risk where a single failure mode (e.g. extreme water level) can override otherwise calm conditions.",
+            "Each sub-score sᵢ ∈ [0, 10] is produced by a logistic (sigmoid) curve s = 10 / (1 + e^(−k(x − m))). "
+            "The midpoint m is where the hazard begins to ramp quickly; k controls steepness. This mimics nonlinear "
+            "human perception of escalating wind or water, rather than treating every 1 mph increment equally.",
+            "Weights (Tampa Bay–oriented defaults): coastal water / surge proxy w = 0.42; wind w = 0.28; "
+            "inland flood composite w = 0.14; nearby route friction (FHP / FL511 counts) w = 0.10. "
+            "These sum to 1.0 before squaring.",
+            "Z is an evacuation-zone vulnerability multiplier from official ArcGIS evacuation layers (Hillsborough HEAT / "
+            "statewide EOC zones). Example mapping used here: Zone A → Z = 1.5, B → 1.3, C → 1.1, D → 1.05, E → 1.0; "
+            "no polygon match → Z = 1.0. Your county’s definitions and orders always prevail over this app.",
+            "This calculation is not foolproof: gauges fault, models disagree, buffers miss your exact street, and "
+            "evacuation letters are not automatically synchronized with every NWS watch or warning.",
+        ],
+    }
+
+    return {
+        "score": round(score, 1),
+        "tier": tier,
+        "model": "TDS_v1",
+        "tds_inner_sum_ws2": round(inner, 3),
+        "zone_multiplier_Z": round(z, 3),
+        "zone_letter": z_letter,
+        "zone_explanation": z_explain,
+        "subscores": subscores,
+        "components": components,
+        "reasons": reasons[:12],
+        "disclaimer": disclaimer,
+        "methodology": methodology,
+    }
 
 
 def compute_threat_score_v2(metrics: dict[str, Any]) -> dict[str, Any]:
