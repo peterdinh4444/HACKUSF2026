@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from flask import (
     Flask,
+    Response,
     flash,
     jsonify,
     redirect,
@@ -610,7 +611,47 @@ def api_assessment_home():
                 **compact_home_assessment(out),
             }
         )
+
     return jsonify({"schema": "hurricane_hub.home_assessment.full.v1", **out})
+
+
+@app.route("/api/assessment/home/pdf")
+@login_required
+def api_assessment_home_pdf():
+    address = (request.args.get("address") or request.args.get("q") or "").strip()
+    lat = request.args.get("lat", type=float)
+    lon = request.args.get("lon", type=float)
+
+    if address and len(address) >= 4:
+        out = assess_address(address)
+    elif lat is not None and lon is not None:
+        out = assess_coordinates(lat, lon)
+    else:
+        return (
+            jsonify(
+                {
+                    "error": "Provide address (4+ characters) or both lat and lon",
+                    "hint": "GET /api/assessment/home/pdf?address=Tampa+FL or ?lat=27.95&lon=-82.45",
+                }
+            ),
+            400,
+        )
+
+    if out.get("error"):
+        err = out["error"]
+        low = str(err).lower()
+        code = 404 if "no geocode" in low or "zip not" in low or "not in tampa" in low or "not in local" in low else 400
+        return jsonify({"error": err}), code
+
+    pdf_bytes = _render_assessment_pdf(out)
+    safe = address.replace("/", "-").replace("\\\\", "-")
+    safe = "".join([c if c.isalnum() or c in " -_" else "-" for c in safe]).strip().replace(" ", "-")
+    if not safe:
+        safe = "home-summary"
+    filename = f"hurricane-hub-home-summary-{safe[:40]}.pdf"
+    response = Response(pdf_bytes, mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 @app.route("/homes")
