@@ -1,7 +1,13 @@
 import { renderScoreDial } from "./score-ui.js";
+import { postThreatTierWatch } from "./alert-email-pref.js";
 import { attachAddressAutocomplete } from "./address-autocomplete.js";
 import { downloadShareReport } from "./home-share-report.js";
-import { initAssistantDock } from "./assistant-chat.js";
+import {
+  bindTopicAiButton,
+  clearAskAiTopicHistory,
+  refreshTopicSummaryRow,
+  syncTopicAiButtonState,
+} from "./detail-topic-ai.js";
 
 const FETCH_OPTS = { credentials: "same-origin" };
 
@@ -319,7 +325,15 @@ function initHomeDetailSelect() {
   const viewport = document.getElementById("home-detail-viewport");
   const placeholder = document.getElementById("home-detail-placeholder");
   const exploreCard = document.querySelector(".homes-explore-card");
+  const summaryEl = document.getElementById("home-detail-topic-summary");
+  const aiBlock = document.getElementById("home-detail-ai-block");
+  const guestEl = document.getElementById("home-detail-ai-guest");
+  const loggedEl = document.getElementById("home-detail-ai-logged");
+  const outEl = document.getElementById("home-detail-ai-out");
+  const aiBtn = document.getElementById("btn-home-topic-ai");
   if (!sel || !viewport) return;
+
+  const getHomeCtx = () => (lastAssessment ? { assessment: lastAssessment } : null);
 
   const apply = () => {
     const v = sel.value;
@@ -332,10 +346,22 @@ function initHomeDetailSelect() {
     if (placeholder) placeholder.hidden = show;
     if (exploreCard) exploreCard.classList.toggle("dash-explore-card--has-topic", show);
     renderHomeTopicGauge(v);
+    const rc = lastAssessment?.risk_card || {};
+    const th0 = lastAssessment?.dashboard?.threat || {};
+    const homeLow = String(rc.threat_tier ?? th0.tier ?? "").toLowerCase() === "low";
+    refreshTopicSummaryRow(v || null, summaryEl, aiBlock, guestEl, loggedEl, outEl, { snapshotLowTier: homeLow });
+    syncTopicAiButtonState(aiBtn, () => sel.value, getHomeCtx);
   };
 
   sel.addEventListener("change", apply);
   apply();
+
+  bindTopicAiButton(aiBtn, {
+    page: "home_risk",
+    getTopic: () => sel.value,
+    getContext: getHomeCtx,
+    outEl,
+  });
 }
 
 function esc(s) {
@@ -348,8 +374,7 @@ function setLoading(on) {
   const el = document.getElementById("homes-loading");
   const btn = document.getElementById("btn-assess");
   const saveBtn = document.getElementById("btn-save");
-  const downloadBtn = document.getElementById("btn-download-pdf");
-  if (!el && !btn && !saveBtn && !downloadBtn) return;
+  if (!el && !btn && !saveBtn) return;
   if (el) {
     el.hidden = !on;
     el.setAttribute("aria-hidden", on ? "false" : "true");
@@ -357,7 +382,6 @@ function setLoading(on) {
   }
   if (btn) btn.disabled = on;
   if (saveBtn) saveBtn.disabled = on;
-  if (downloadBtn) downloadBtn.disabled = on;
 }
 
 function humanMatchMethod(m) {
@@ -588,6 +612,7 @@ function renderHomeTds(threat) {
 
 function renderAssessment(data) {
   lastAssessment = data;
+  clearAskAiTopicHistory(document.getElementById("btn-home-topic-ai"));
   const rc = data.risk_card || {};
   const th = data.dashboard?.threat || {};
   const geo = data.geocode || {};
@@ -609,6 +634,13 @@ function renderAssessment(data) {
   }
 
   setThreat(rc.threat_score ?? th.score, rc.threat_tier ?? th.tier);
+  const cap = document.querySelector(".homes-dash-hero .dash-hero__caption");
+  if (cap) {
+    const low = String(rc.threat_tier ?? th.tier ?? "").toLowerCase() === "low";
+    cap.textContent = low
+      ? "Green band — no elevated signals in this snapshot from the feeds we track. Still follow NWS and your county when weather is active."
+      : "Not an evacuation order — always follow your county.";
+  }
   renderHomeTds(th);
 
   const reasons = document.getElementById("home-reasons");
@@ -657,6 +689,11 @@ function renderAssessment(data) {
   renderHomeDashboardDetailTables(data.dashboard);
   const homeSel = document.getElementById("home-detail-select");
   if (homeSel?.value) renderHomeTopicGauge(homeSel.value);
+  const aiBtn = document.getElementById("btn-home-topic-ai");
+  const homeCtx = () => (lastAssessment ? { assessment: lastAssessment } : null);
+  syncTopicAiButtonState(aiBtn, () => homeSel?.value || "", homeCtx);
+
+  postThreatTierWatch(rc.threat_tier ?? th.tier, rc.threat_score ?? th.score);
 }
 
 function renderTrafficNear(data) {
@@ -804,7 +841,7 @@ async function postSave(nickname, address) {
 }
 
 async function loadProfiles() {
-  const res = await fetch("/api/profiles", FETCH_OPTS);
+  const res = await fetch("/api/user/me", FETCH_OPTS);
   const data = await res.json();
   const ul = document.getElementById("profile-list");
   if (res.status === 401) {
@@ -998,46 +1035,6 @@ function bootWorkflowPage() {
     }
   });
 
-  document.getElementById("btn-download-pdf")?.addEventListener("click", async () => {
-    const addr = document.getElementById("addr")?.value?.trim() || "";
-    const st = document.getElementById("form-status");
-    if (addr.length < 4) {
-      if (st) st.textContent = "Enter an address first.";
-      return;
-    }
-    if (st) st.textContent = "Preparing PDF…";
-    setLoading(true);
-    try {
-      const url = `/api/assessment/home/pdf?address=${encodeURIComponent(addr)}`;
-      const res = await fetch(url, { ...FETCH_OPTS });
-      if (res.status === 401) {
-        const data = await res.json().catch(() => ({}));
-        window.location.href = data.login_url || `/login?next=${encodeURIComponent(window.location.pathname)}`;
-        return;
-      }
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error || res.statusText || "PDF download failed");
-      }
-      const blob = await res.blob();
-      const filename = `hurricane-hub-${addr.replace(/[^a-zA-Z0-9]+/g, "-").replace(/-+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40)}.pdf`;
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = filename || "hurricane-hub-report.pdf";
-      a.rel = "noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(blobUrl);
-      if (st) st.textContent = "PDF downloaded.";
-    } catch (err) {
-      if (st) st.textContent = err.message || String(err);
-    } finally {
-      setLoading(false);
-    }
-  });
-
   document.getElementById("reload-profiles")?.addEventListener("click", loadProfiles);
   initHomeDetailSelect();
   attachAddressAutocomplete(document.getElementById("addr"), { minChars: 3, debounceMs: 280 });
@@ -1045,6 +1042,78 @@ function bootWorkflowPage() {
   bindTrafficRouteForm();
   loadProfiles();
 }
+
+window.addEventListener("hurricanehub-assistant-assess-address", async (e) => {
+  const { address, done } = e.detail || {};
+  const addr = String(address || "").trim();
+  if (addr.length < 4) {
+    done?.(new Error("Enter at least 4 characters."));
+    return;
+  }
+  try {
+    setLoading(true);
+    const data = await postAssess(addr);
+    renderAssessment(data);
+    const mainAddr = document.getElementById("addr");
+    if (mainAddr) mainAddr.value = addr;
+    const st = document.getElementById("form-status");
+    if (st) st.textContent = "";
+    done?.(null);
+  } catch (err) {
+    done?.(err instanceof Error ? err : new Error(String(err)));
+  } finally {
+    setLoading(false);
+  }
+});
+
+window.addEventListener("hurricanehub-chat-load-home", async (e) => {
+  const done = e.detail?.done;
+  const finish = (payload) => {
+    try {
+      done?.(payload);
+    } catch {
+      /* ignore */
+    }
+  };
+  try {
+    const refBtn = document.getElementById("btn-snapshot-refresh");
+    const pid = refBtn?.getAttribute("data-profile-id");
+    if (pid) {
+      setLoading(true);
+      const st = document.getElementById("snapshot-status");
+      if (st) st.textContent = "Refreshing for guide…";
+      const r = await fetch(`/api/profiles/${pid}/refresh`, { ...FETCH_OPTS, method: "POST" });
+      const d = await r.json();
+      if (r.status === 401) {
+        window.location.href = d.login_url || `/login?next=${encodeURIComponent(window.location.pathname)}`;
+        finish({ ok: false });
+        return;
+      }
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      renderAssessment(d);
+      if (st) st.textContent = "";
+      finish({ ok: true });
+      return;
+    }
+    const addr = document.getElementById("addr")?.value?.trim() || "";
+    if (addr.length >= 4) {
+      setLoading(true);
+      const data = await postAssess(addr);
+      renderAssessment(data);
+      const st = document.getElementById("form-status");
+      if (st) st.textContent = "Assessment refreshed for the guide.";
+      finish({ ok: true });
+      return;
+    }
+    finish({ ok: false, message: "no-input" });
+  } catch (err) {
+    const st = document.getElementById("form-status") || document.getElementById("snapshot-status");
+    if (st) st.textContent = String(err?.message || err);
+    finish({ ok: false, message: String(err?.message || err) });
+  } finally {
+    setLoading(false);
+  }
+});
 
 if (readSnapshotAssessment()) {
   bootSnapshotPage();
@@ -1060,11 +1129,11 @@ document.body.addEventListener("click", (e) => {
   downloadShareReport(lastAssessment);
 });
 
-initAssistantDock("home_risk", () => {
+window.__hurricaneHubAssistantContext = () => {
   if (!lastAssessment) {
     return {
       note: "No home assessment on screen yet. Run “Run assessment” or open a saved home that has a snapshot.",
     };
   }
-  return { page: "home_risk", assessment: lastAssessment };
-});
+  return { assessment: lastAssessment };
+};

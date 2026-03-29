@@ -56,6 +56,20 @@
           <option value="traffic">Nearby traffic &amp; route check</option>
           <option value="local">ZIP &amp; regional context</option>
         </select>
+        <p class="dash-detail-topic-summary muted" id="home-detail-topic-summary" hidden></p>
+        <div class="dash-detail-ai-block" id="home-detail-ai-block" hidden>
+          <p class="muted dash-detail-ai-guest" id="home-detail-ai-guest" hidden>
+            <strong>Sign in</strong> for <strong>Ask AI</strong> on each topic and the <strong>floating guide</strong> using this assessment.
+            <a href="{{ url_for('login', next=request.path) }}">Log in</a> or <a href="{{ url_for('register') }}">sign up</a>.
+          </p>
+          <div class="dash-detail-ai-logged" id="home-detail-ai-logged" hidden>
+            <button type="button" class="btn btn--sm btn--ghost btn--ask-ai" id="btn-home-topic-ai" aria-label="Ask AI for a short summary of this topic">
+              <span class="btn-ask-ai__sparkle" aria-hidden="true">✨</span>
+              Ask AI
+            </button>
+          </div>
+          <div class="dash-detail-ai-out" id="home-detail-ai-out" hidden aria-live="polite"></div>
+        </div>
         <p class="dash-detail-placeholder muted" id="home-detail-placeholder">↑ Select a topic.</p>
         <div id="home-detail-viewport" class="dash-detail-viewport" hidden>
           <div id="home-detail-gauge" class="dash-detail-gauge" hidden aria-live="polite"></div>
@@ -129,7 +143,7 @@
               This app pulls <strong>FDOT ArcGIS</strong> layers (FL511 + FHP) near your pin. For the statewide map and official closures, use
               <a href="https://www.fl511.com" target="_blank" rel="noopener noreferrer">FL511</a> and
               <a href="https://www.flhsmv.gov/fhp/traffic/" target="_blank" rel="noopener noreferrer">FHP traffic</a>.
-              Optional APIs such as TomTom incidents or OpenRouteService directions are listed in <code class="homes-inline-code">GET /api/endpoints</code> for developers — not wired into scores here.
+              Other traffic APIs exist for developers; this app uses the FDOT-style layers above for scores and maps here.
             </p>
             <div id="home-traffic-root" class="home-traffic-root"></div>
             <div class="homes-traffic-route homes-traffic-route--in-panel" aria-labelledby="homes-route-title">

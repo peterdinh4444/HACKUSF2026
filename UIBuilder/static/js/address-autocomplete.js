@@ -1,5 +1,5 @@
 /**
- * Address / place autocomplete via GET /api/geocode/suggest (Mapbox or Nominatim).
+ * Address / place autocomplete (Mapbox or Nominatim-backed suggestions).
  */
 const FETCH_OPTS = { credentials: "same-origin" };
 
@@ -159,7 +159,13 @@ export function attachAddressAutocomplete(input, options = {}) {
     true
   );
 
+  function onHubCloseOverlays() {
+    close();
+  }
+  document.addEventListener("hurricanehub-close-overlays", onHubCloseOverlays);
+
   return () => {
+    document.removeEventListener("hurricanehub-close-overlays", onHubCloseOverlays);
     close();
     wrap.replaceWith(input);
   };

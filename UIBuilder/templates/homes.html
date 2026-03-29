@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% set assistant_chat_page = "home_risk" %}
 {% block title %}Home risk{% endblock %}
 {% block main_class %} main--dash{% endblock %}
 {% block content %}
@@ -8,7 +7,7 @@
     <div class="dash-header__lead">
       <p class="dash-kicker">Tampa Bay</p>
       <h1 class="dash-title">Home risk</h1>
-      <p class="dash-lede homes-header__lede">Assess one address: risk score, evacuation zone, traffic nearby, and regional context. Planning aid only — follow NWS and your county. Methodology: <a href="{{ url_for('how_scores_page') }}">How scores work</a>.</p>
+      <p class="dash-lede homes-header__lede">Assess one address: risk score, evacuation zone, traffic nearby, and regional context. Planning aid only — follow NWS and your county. <a href="{{ url_for('faq_page') }}">FAQ</a> · <a href="{{ url_for('how_scores_page') }}">How the score works</a>.</p>
     </div>
     <div class="dash-header__meta" aria-label="Last assessment metadata">
       <span class="dash-chip" id="home-coords-chip" hidden aria-live="polite">—</span>
@@ -34,7 +33,6 @@
       <div class="homes-actions">
         <button type="submit" class="btn btn--primary" id="btn-assess">Run assessment</button>
         <button type="button" class="btn" id="btn-save">Save to profile</button>
-        <button type="button" class="btn" id="btn-download-pdf">Download PDF</button>
       </div>
     </form>
     <p class="homes-form-status" id="form-status" aria-live="polite"></p>

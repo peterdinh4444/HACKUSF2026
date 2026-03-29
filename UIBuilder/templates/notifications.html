@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Alerts &amp; news{% endblock %}
+{% block main_class %} main--dash{% endblock %}
+{% block content %}
+<div class="dash notifications-page">
+  <header class="dash-header">
+    <div class="dash-header__lead">
+      <p class="dash-kicker">Account</p>
+      <h1 class="dash-title">Alerts &amp; news</h1>
+      <p class="dash-lede">Save email preferences with the button below (not automatic on click). Headlines below are read from the app database and refresh in the background. AI summary uses the same stored articles.</p>
+    </div>
+  </header>
+
+  <div class="stream-sheet notifications-page__sheet">
+    <div class="stream-sheet__block">
+      <h2 class="stream-sheet__h">Email notifications</h2>
+      <p class="muted stream-sheet__lede">Uses your <strong>verified</strong> account email. App helpers only — not official warnings. Always follow NWS and your county.</p>
+      <form id="form-notification-prefs" class="notifications-form">
+        <ul class="notifications-form__options">
+          <li>
+            <label class="notifications-form__label">
+              <input type="checkbox" name="tier_alerts" id="notif-tier" {% if current_user.alert_email_opt_in %}checked{% endif %} />
+              <span><strong>Risk tier stepped up</strong> — email when the dashboard readiness tier worsens (low → elevated → high → extreme). Throttled so refreshes don’t spam you.</span>
+            </label>
+          </li>
+          <li>
+            <label class="notifications-form__label">
+              <input type="checkbox" name="evacuation_alerts" id="notif-evac" {% if current_user.evacuation_alert_opt_in %}checked{% endif %} />
+              <span><strong>Evacuation-related updates</strong> — email when we detect important evacuation-zone or status changes for your <strong>saved homes</strong> (uses the same background checks as the rest of the app).</span>
+            </label>
+          </li>
+        </ul>
+        <div class="notifications-form__actions">
+          <button type="submit" class="btn btn--primary" id="btn-save-notification-prefs">Save email preferences</button>
+          <p class="muted notifications-form__status" id="notif-pref-status" role="status" hidden></p>
+        </div>
+      </form>
+      <div class="notifications-sample">
+        <p class="muted stream-sheet__lede" style="margin-top:1rem;">Preview the evacuation-style message layout:</p>
+        <button type="button" class="btn btn--sm btn--ghost" id="btn-evac-sample-email">Send sample evacuation email</button>
+        <p class="muted dash-email-settings__test-hint" id="evac-sample-hint">Labeled sample to your inbox. One per minute.</p>
+        <p class="notifications-form__status muted" id="notif-sample-status" role="status" hidden></p>
+      </div>
+    </div>
+
+    <div class="stream-sheet__block">
+      <div class="notifications-news-head">
+        <h2 class="stream-sheet__h">Headlines from the database</h2>
+        <div class="notifications-news-actions">
+          <button type="button" class="btn btn--sm btn--ghost" id="btn-refresh-news-feed">Refresh feeds now</button>
+          <button type="button" class="btn btn--sm btn--primary" id="btn-ai-news-brief">AI summary of articles</button>
+        </div>
+      </div>
+      <p class="muted stream-sheet__lede">
+        {% if news_last_sync %}Last ingest recorded: <strong>{{ news_last_sync }}</strong>.{% else %}No ingest timestamp yet — feeds may still be loading.{% endif %}
+        Total rows: <strong>{{ news_stats.total }}</strong>.
+        Headlines below are <strong>ranked</strong> using your saved homes (ZIP and address text) when they overlap article text, then Tampa Bay region keywords; newest items still surface when nothing matches.
+      </p>
+      <div class="notifications-ai-out" id="news-ai-brief" hidden>
+        <h3 class="notifications-ai-out__title">AI read of stored articles</h3>
+        <div class="notifications-ai-out__body" id="news-ai-brief-text" aria-live="polite"></div>
+      </div>
+      <ul class="notifications-news-list">
+        {% for it in news_items %}
+        <li class="notifications-news-item">
+          <span class="notifications-news-item__src">{{ it.source }}</span>
+          <span class="notifications-news-item__title">{% if it.url %}<a href="{{ it.url }}" rel="noopener noreferrer" target="_blank">{{ it.title or "Untitled" }}</a>{% else %}{{ it.title or "Untitled" }}{% endif %}</span>
+          {% set sm = it.summary or "" %}
+          {% if sm %}<p class="muted notifications-news-item__sum">{{ sm[:280] }}{% if sm|length > 280 %}…{% endif %}</p>{% endif %}
+        </li>
+        {% else %}
+        <li class="muted">No articles yet. Click “Refresh feeds now” and wait a few seconds, then reload the page.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  <script type="application/json" id="notifications-page-meta">{{ {"news_last_sync": news_last_sync, "news_total": news_stats.total, "reader_location": news_reader_location} | tojson }}</script>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/notifications.js') }}" type="module"></script>
+{% endblock %}

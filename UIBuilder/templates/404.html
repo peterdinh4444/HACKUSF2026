@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Not found{% endblock %}
+{% block main_class %} main--dash{% endblock %}
+{% block head_extra %}
+<meta http-equiv="refresh" content="5;url={{ url_for('index') }}" />
+{% endblock %}
+{% block content %}
+<div class="not-found-page card">
+  <h1 class="not-found-page__title">Page not found</h1>
+  <p class="muted not-found-page__lede">That URL isn’t part of Hurricane Hub. You’ll be redirected to the home page in a few seconds.</p>
+  <p class="not-found-page__actions">
+    <a class="btn btn--primary" href="{{ url_for('index') }}">Go home now</a>
+  </p>
+</div>
+{% endblock %}
