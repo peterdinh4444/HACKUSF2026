@@ -1,0 +1,20 @@
+{# Logged-in only; child templates set assistant_chat_page to "dashboard" or "home_risk". #}
+<div id="assistant-root" class="assistant-root" data-page="{{ assistant_chat_page }}">
+  <button type="button" class="assistant-fab btn btn--primary" id="assistant-toggle" aria-expanded="false" aria-controls="assistant-panel">
+    Ask about this page
+  </button>
+  <div id="assistant-panel" class="assistant-panel card" role="dialog" aria-modal="true" aria-labelledby="assistant-panel-title" hidden>
+    <div class="assistant-panel__head">
+      <h2 id="assistant-panel-title" class="assistant-panel__title">Ask about this snapshot</h2>
+      <button type="button" class="btn btn--sm btn--ghost" id="assistant-close" aria-label="Close chat">Close</button>
+    </div>
+    <p class="assistant-panel__lead muted">Uses the data currently on this page. Planning aid only — verify with <a href="https://www.weather.gov/tbw/" rel="noopener">NWS</a> and your county.</p>
+    <div id="assistant-messages" class="assistant-messages" aria-live="polite"></div>
+    <p class="assistant-status muted" id="assistant-status" role="status"></p>
+    <form id="assistant-form" class="assistant-form">
+      <label class="assistant-label" for="assistant-input">Your question</label>
+      <textarea id="assistant-input" class="assistant-input" name="q" rows="2" placeholder="e.g. What does this risk score mean for us tonight?" autocomplete="off" required></textarea>
+      <button type="submit" class="btn btn--primary btn--sm" id="assistant-send">Send</button>
+    </form>
+  </div>
+</div>

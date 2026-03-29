@@ -3,8 +3,10 @@ Hurricane Hub — Flask prototype: aggregated public APIs for Tampa Bay flood / 
 """
 from __future__ import annotations
 
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from functools import wraps
 from urllib.parse import urlparse
 
@@ -24,14 +26,21 @@ from services.apis import (
     DEFAULT_LON,
     aggregate_dashboard,
     catalog_endpoints,
+    geocode_suggestions,
     mapbox_forward_geocode,
+    plan_evac_drive,
 )
 from services.auth_db import create_user, get_user_by_id, init_auth_db, verify_login
-from services.home_assessment import assess_address, build_risk_card
+from services.home_assessment import (
+    assess_address,
+    assess_coordinates,
+    build_risk_card,
+    compact_home_assessment,
+)
 from services.regional_tampa import regional_lookup
+from services.claude_chat import call_claude
 from services.tampa_db import (
     delete_home_profile,
-    get_all_zips,
     get_by_zip,
     get_home_profile,
     list_home_profiles,
@@ -42,13 +51,23 @@ from services.tampa_db import (
     update_profile_assessment,
 )
 
+_APP_ROOT = Path(__file__).resolve().parent
+
+
+def _load_project_env() -> None:
+    """Load UIBuilder/.env regardless of the process working directory."""
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(_APP_ROOT / ".env")
+    except ImportError:
+        pass
+
+
+_load_project_env()
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me-in-production")
-
-
-@app.route('/favicon.ico')
-def favicon():
-    return '', 204
 
 
 def _session_user_id() -> int | None:
@@ -78,6 +97,35 @@ def _safe_internal_next(url: str) -> str | None:
     return None
 
 
+def _normalize_assistant_prior_messages(raw) -> list[dict[str, str]]:
+    """Keep only a valid u→a→u→a prefix ending with assistant (completed turns)."""
+    if not isinstance(raw, list):
+        return []
+    cleaned: list[dict[str, str]] = []
+    for item in raw[-20:]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            continue
+        c = content.strip()
+        if not c:
+            continue
+        if len(c) > 12000:
+            c = c[:12000] + "…"
+        cleaned.append({"role": role, "content": c})
+    validated: list[dict[str, str]] = []
+    for i, m in enumerate(cleaned):
+        want = "user" if i % 2 == 0 else "assistant"
+        if m["role"] != want:
+            break
+        validated.append(m)
+    if validated and validated[-1]["role"] == "user":
+        validated.pop()
+    return validated
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -100,6 +148,17 @@ def inject_user():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/dashboard")
+def dashboard_page():
+    return render_template("dashboard.html")
+
+
+@app.route("/how-scores")
+def how_scores_page():
+    """Technical methodology for TDS — public; rest of the app stays plain-language."""
+    return render_template("how_scores.html")
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -175,6 +234,14 @@ def api_geocode():
     return jsonify(mapbox_forward_geocode(q))
 
 
+@app.route("/api/geocode/suggest")
+def api_geocode_suggest():
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 3:
+        return jsonify({"suggestions": [], "query": q, "error": "query too short"}), 400
+    return jsonify(geocode_suggestions(q))
+
+
 @app.route("/api/tampa/point")
 def tampa_point():
     lat = request.args.get("lat", type=float)
@@ -247,41 +314,71 @@ def tampa_zip_stats():
     return jsonify(zip_stats())
 
 
-@app.route("/api/tampa/zips/all")
-def tampa_zips_all():
-    seed_from_csv_if_empty()
-    return jsonify({"zips": get_all_zips()})
+@app.route("/api/assessment/home", methods=["GET", "POST"])
+@login_required
+def api_assessment_home():
+    """
+    Dedicated home / property risk bundle (same engine as the Home risk UI).
 
+    Full: all keys (dashboard, tampa_bay_regional, risk_card) for the interactive page.
+    Compact: scores + risk_card + slim evacuation/traffic/snapshot only — for scripts and widgets.
 
-@app.route("/api/heatmap/data")
-def heatmap_data():
-    seed_from_csv_if_empty()
-    zips = get_all_zips()
-    simulate = request.args.get("simulate", "").lower()
-    heat_data = []
-    
-    if simulate:
-        # For simulation, use fixed intensities to ensure visible change
-        intensity = 0.3 if simulate == "mild" else 0.7
-        for zip_row in zips:
-            lat, lon = zip_row["lat"], zip_row["lon"]
-            heat_data.append([lat, lon, intensity])
+    GET query: address=… OR lat=&lon=, optional compact=1
+    POST JSON: {"address": "…"} OR {"lat": n, "lon": n}, optional "compact": true
+    """
+    compact = False
+    address = ""
+    lat: float | None = None
+    lon: float | None = None
+
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        address = (data.get("address") or "").strip()
+        compact = bool(data.get("compact"))
+        try:
+            if data.get("lat") is not None and data.get("lon") is not None:
+                lat = float(data["lat"])
+                lon = float(data["lon"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "lat and lon must be numbers"}), 400
     else:
-        # Real-time data
-        for zip_row in zips:
-            lat, lon = zip_row["lat"], zip_row["lon"]
-            try:
-                dash = aggregate_dashboard(lat=lat, lon=lon, verbose=False)
-                threat = dash.get("threat", {})
-                score = threat.get("score", 0)
-                # Normalize score to 0-1 for heat intensity
-                intensity = min(max(score / 100.0, 0.0), 1.0)
-                heat_data.append([lat, lon, intensity])
-            except Exception as e:
-                print(f"Error getting threat for {zip_row['zip']}: {e}")
-                heat_data.append([lat, lon, 0.0])
-    
-    return jsonify({"heat_data": heat_data})
+        address = (request.args.get("address") or request.args.get("q") or "").strip()
+        compact = request.args.get("compact") == "1"
+        lat = request.args.get("lat", type=float)
+        lon = request.args.get("lon", type=float)
+
+    seed_from_csv_if_empty()
+
+    if address and len(address) >= 4:
+        out = assess_address(address)
+    elif lat is not None and lon is not None:
+        out = assess_coordinates(lat, lon)
+    else:
+        return jsonify(
+            {
+                "error": "Provide address (4+ characters) or both lat and lon",
+                "hint": "GET /api/assessment/home?address=Tampa+FL or ?lat=27.95&lon=-82.45&compact=1",
+            }
+        ), 400
+
+    if out.get("error"):
+        err = out["error"]
+        low = err.lower()
+        code = (
+            404
+            if "no geocode" in low or "zip not" in low or "not in tampa" in low or "not in local" in low
+            else 400
+        )
+        return jsonify(out), code
+
+    if compact:
+        return jsonify(
+            {
+                "schema": "hurricane_hub.home_assessment.compact.v1",
+                **compact_home_assessment(out),
+            }
+        )
+    return jsonify({"schema": "hurricane_hub.home_assessment.full.v1", **out})
 
 
 @app.route("/homes")
@@ -291,20 +388,65 @@ def homes_page():
     return render_template("homes.html")
 
 
-@app.route("/heatmap")
-def heatmap_page():
-    return render_template("heatmap.html")
+@app.route("/homes/<int:pid>")
+@login_required
+def home_snapshot_page(pid: int):
+    """Dedicated page for one saved profile — full snapshot without the address workflow above the fold."""
+    seed_from_csv_if_empty()
+    uid = _session_user_id()
+    row = get_home_profile(pid, uid) if uid is not None else None
+    if not row:
+        flash("That saved home was not found.", "error")
+        return redirect(url_for("homes_page"))
+    assessment = None
+    raw = row.get("last_assessment_json")
+    if raw:
+        try:
+            assessment = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError, ValueError):
+            assessment = None
+    return render_template(
+        "home_snapshot.html",
+        profile_id=pid,
+        profile_nickname=(row.get("nickname") or "Saved home").strip() or "Saved home",
+        profile_address=(row.get("address_line") or "—").strip() or "—",
+        assessment=assessment,
+    )
+
+
+@app.route("/api/profiles/evac-route", methods=["POST"])
+@login_required
+def api_profiles_evac_route():
+    """Driving estimate from an assessed origin to a user-entered destination (Nominatim + optional Mapbox)."""
+    uid = _session_user_id()
+    if uid is None:
+        return jsonify({"error": "Unauthorized", "login_url": url_for("login")}), 401
+    data = request.get_json(silent=True) or {}
+    try:
+        from_lat = float(data.get("from_lat"))
+        from_lon = float(data.get("from_lon"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "from_lat and from_lon required as numbers"}), 400
+    dest = (data.get("destination") or data.get("to") or "").strip()
+    out = plan_evac_drive(from_lat, from_lon, dest)
+    if out.get("error"):
+        return jsonify(out), 400
+    return jsonify(out)
 
 
 @app.route("/api/profiles/assess", methods=["POST"])
 @login_required
 def api_profiles_assess():
+    """Backward-compatible alias — same payload as POST /api/assessment/home (full)."""
     data = request.get_json(silent=True) or {}
     addr = (data.get("address") or "").strip()
+    seed_from_csv_if_empty()
     out = assess_address(addr)
     if out.get("error"):
-        return jsonify(out), 400
-    return jsonify(out)
+        low = out["error"].lower()
+        code = 404 if "no geocode" in low or "zip not" in low or "not in tampa" in low else 400
+        return jsonify(out), code
+    return jsonify({"schema": "hurricane_hub.home_assessment.full.v1", **out})
 
 
 @app.route("/api/profiles", methods=["GET", "POST"])
@@ -333,7 +475,7 @@ def api_profiles():
         out.get("matched_zip"),
         out,
     )
-    return jsonify({"id": pid, "saved": True, "assessment": out})
+    return jsonify({"id": pid, "saved": True, "assessment": {"schema": "hurricane_hub.home_assessment.full.v1", **out}})
 
 
 @app.route("/api/profiles/<int:pid>", methods=["GET", "DELETE"])
@@ -352,6 +494,36 @@ def api_profile_one(pid: int):
     return jsonify(dict(row))
 
 
+@app.route("/api/assistant/chat", methods=["POST"])
+@login_required
+def api_assistant_chat():
+    """
+    Claude-powered Q&A using the JSON snapshot the client sends (dashboard or home assessment).
+    Requires ANTHROPIC_API_KEY on the server.
+    """
+    data = request.get_json(silent=True) or {}
+    page = (data.get("page") or "").strip()
+    if page not in ("dashboard", "home_risk"):
+        return jsonify({"error": 'page must be "dashboard" or "home_risk"'}), 400
+    ctx = data.get("context")
+    if ctx is not None and not isinstance(ctx, dict):
+        return jsonify({"error": "context must be a JSON object"}), 400
+    ctx = dict(ctx) if isinstance(ctx, dict) else {}
+    prompt = (data.get("message") or data.get("prompt") or "").strip()
+    if not prompt:
+        return jsonify({"error": "message is required"}), 400
+    if len(prompt) > 8000:
+        return jsonify({"error": "message too long"}), 400
+
+    prior = _normalize_assistant_prior_messages(data.get("messages"))
+    reply, err = call_claude(page=page, context=ctx, prior_messages=prior, user_message=prompt)
+    if err:
+        low = err.lower()
+        code = 503 if "not configured" in low or "anthropic_api_key" in low else 502
+        return jsonify({"error": err}), code
+    return jsonify({"reply": reply})
+
+
 @app.route("/api/profiles/<int:pid>/refresh", methods=["POST"])
 @login_required
 def api_profile_refresh(pid: int):
@@ -365,7 +537,7 @@ def api_profile_refresh(pid: int):
     if out.get("error"):
         return jsonify(out), 400
     update_profile_assessment(pid, uid, out)
-    return jsonify(out)
+    return jsonify({"schema": "hurricane_hub.home_assessment.full.v1", **out})
 
 
 def create_app():
@@ -376,11 +548,5 @@ def create_app():
 init_auth_db()
 
 if __name__ == "__main__":
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-    except ImportError:
-        pass
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="127.0.0.1", port=port, debug=True)

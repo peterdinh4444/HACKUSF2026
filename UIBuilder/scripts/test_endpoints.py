@@ -22,6 +22,8 @@ def main() -> None:
     print("   evac source", r["evacuation"].get("source"))
     print("   power count", r["power_outages"].get("count_in_bbox"))
     print("   fl511 layers", list(r["traffic_fl511"].get("layers", {}).keys()))
+    tn = r.get("traffic_near_home") or {}
+    print("   traffic near pin", tn.get("total_nearby"), "in", tn.get("radius_m"), "m buffer")
 
     print("3. SQLite seed …")
     print("  ", seed_from_csv_if_empty())

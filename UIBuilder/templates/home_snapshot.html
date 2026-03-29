@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% set assistant_chat_page = "home_risk" %}
+{% block title %}{{ profile_nickname|e }} · Saved home{% endblock %}
+{% block main_class %} main--dash{% endblock %}
+{% block content %}
+<div class="dash homes-dash homes-dash--snapshot">
+  <header class="dash-header homes-snapshot-header">
+    <div class="homes-snapshot-bar">
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('homes_page') }}">← All homes</a>
+      {% if assessment %}
+      <button type="button" class="btn btn--sm btn--primary" id="btn-snapshot-refresh" data-profile-id="{{ profile_id }}">Refresh snapshot</button>
+      {% endif %}
+    </div>
+    <div class="dash-header__lead homes-snapshot-header__lead">
+      <p class="dash-kicker">Saved home</p>
+      <h1 class="dash-title">{{ profile_nickname|e }}</h1>
+      <p class="dash-lede homes-header__lede">{{ profile_address|e }}</p>
+    </div>
+    <div class="dash-header__meta" aria-label="Snapshot metadata">
+      <span class="dash-chip" id="home-coords-chip" hidden aria-live="polite">—</span>
+      <span class="dash-chip dash-chip--muted" id="home-updated-chip" hidden aria-live="polite">—</span>
+    </div>
+    <p class="homes-form-status homes-snapshot-status" id="snapshot-status" aria-live="polite"></p>
+  </header>
+
+  {% if assessment %}
+  {% set home_results_initially_hidden = false %}
+  {% include '_home_results.html' %}
+  <script type="application/json" id="home-snapshot-json">{{ assessment | tojson }}</script>
+  {% else %}
+  <div class="homes-snapshot-missing card">
+    <p class="homes-snapshot-missing__title">No snapshot saved yet</p>
+    <p class="muted">Run an assessment from <a href="{{ url_for('homes_page') }}">Home risk</a> for this address, then save or refresh the profile.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/homes.js') }}" type="module"></script>
+{% endblock %}
