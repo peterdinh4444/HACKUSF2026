@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}FAQ{% endblock %}
+{% block main_class %} main--dash{% endblock %}
+{% block content %}
+<div class="dash faq-page">
+  <header class="dash-header">
+    <div class="dash-header__lead">
+      <p class="dash-kicker">Help</p>
+      <h1 class="dash-title">Frequently asked questions</h1>
+      <p class="dash-lede">Quick answers about Hurricane Hub. This is still a prototype — always use <a href="https://www.weather.gov/tbw/" rel="noopener">NWS Tampa Bay</a> and your county for warnings and orders.</p>
+    </div>
+  </header>
+
+  {% include '_guest_ai_nudge.html' %}
+
+  <div class="faq-list faq-stream">
+    <section class="faq-item" id="what-is-hub">
+      <h2 class="faq-item__q">What is Hurricane Hub?</h2>
+      <p class="faq-item__a">A Tampa Bay–focused site that pulls together <strong>public</strong> weather, water, river, road, and regional data into one snapshot. It helps you orient before you dig into official sources — it is not a forecast and not an evacuation order.</p>
+    </section>
+
+    <section class="faq-item" id="official">
+      <h2 class="faq-item__q">Can I rely on this instead of the government?</h2>
+      <p class="faq-item__a"><strong>No.</strong> Use the National Weather Service, your county emergency management, and law enforcement for warnings, evacuations, and closures. Hurricane Hub is a planning aid built from open feeds, which can lag, fail, or disagree.</p>
+    </section>
+
+    <section class="faq-item" id="risk-score">
+      <h2 class="faq-item__q">What does the 0–100 risk score mean?</h2>
+      <p class="faq-item__a">It’s a <strong>single planning index</strong> that blends several hazard signals (water, wind, inland flood cues, nearby road trouble) and adjusts a bit if an official evacuation zone matches your pin. A <strong>low / green</strong> value means those feeds don’t show elevated concern <em>in this app’s model right now</em> — not that a storm can’t happen. See <a href="{{ url_for('how_scores_page') }}">How the score works</a> for a short breakdown.</p>
+    </section>
+
+    <section class="faq-item" id="dashboard-vs-home">
+      <h2 class="faq-item__q">Dashboard vs Home risk</h2>
+      <p class="faq-item__a"><strong>Dashboard</strong> uses a map pin (or default coordinates) for a quick regional snapshot. <strong>Evacuation &amp; traffic</strong> is a companion page focused on zones, nearby road feeds, and a checklist. <strong>Home risk</strong> (after sign-in) geocodes a specific address, saves profiles, and adds context like evacuation zone lookup and traffic near that pin.</p>
+    </section>
+
+    <section class="faq-item" id="account">
+      <h2 class="faq-item__q">Why do I need an account for Home risk?</h2>
+      <p class="faq-item__a">So you can save addresses and snapshots without putting that data in a shared browser-only cache. Credentials stay on the server you run (local SQLite by default).</p>
+    </section>
+
+    <section class="faq-item" id="severity-email">
+      <h2 class="faq-item__q">What emails can I get?</h2>
+      <p class="faq-item__a">Signed in? Open <strong>Alerts &amp; news</strong> in the navigation. Save preferences with the <strong>Save email preferences</strong> button (verified email required for sends). You can get tier-increase notices, evacuation-related updates tied to saved homes, and a sample evacuation-style email. None of this replaces NWS or your county.</p>
+    </section>
+
+    <section class="faq-item" id="ai-guide">
+      <h2 class="faq-item__q">What is the robot button?</h2>
+      <p class="faq-item__a">When you’re signed in, the <strong>guide</strong> answers questions using the data on your current page — dashboard, home assessment, or <strong>Evacuation &amp; traffic</strong> — plus short general tips elsewhere. It can be wrong; treat it as a second opinion, not authority. “Ask AI” under topic dropdowns is a one-shot summary per topic per snapshot to save cost.</p>
+    </section>
+
+    <section class="faq-item" id="data-sources">
+      <h2 class="faq-item__q">Where does the data come from?</h2>
+      <p class="faq-item__a">Public weather, water, river, and road feeds (for example NWS, NOAA, USGS, Open-Meteo, FDOT-style layers, and county GIS for evacuation zones). Data can lag or disagree — always confirm with official sources.</p>
+    </section>
+
+    <p class="faq-foot muted"><a href="{{ url_for('data_api_page') }}">Data API</a> · <a href="{{ url_for('how_scores_page') }}">How the score works</a> · <a href="{{ url_for('dashboard_page') }}">Dashboard</a> · <a href="{{ url_for('homes_page') }}">Home risk</a></p>
+  </div>
+</div>
+{% endblock %}

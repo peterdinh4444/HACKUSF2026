@@ -1,19 +1,65 @@
-{# Logged-in only; child templates set assistant_chat_page to "dashboard" or "home_risk". #}
-<div id="assistant-root" class="assistant-root" data-page="{{ assistant_chat_page }}">
-  <button type="button" class="assistant-fab btn btn--primary" id="assistant-toggle" aria-expanded="false" aria-controls="assistant-panel">
-    Ask about this page
+{# Logged-in only; assistant_chat_page: dashboard | home_risk | evacuation | notifications | general #}
+<div id="assistant-root" class="assistant-root" data-page="{{ assistant_chat_page }}" data-assistant-open="0">
+  <button type="button" class="assistant-fab btn btn--primary" id="assistant-toggle" aria-expanded="false" aria-controls="assistant-panel" aria-label="Open guide" title="Open guide">
+    <svg class="assistant-fab__icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="9" width="16" height="11" rx="3" />
+      <circle cx="9.5" cy="14.5" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="14.5" cy="14.5" r="1.1" fill="currentColor" stroke="none" />
+      <path d="M10 18h4" />
+      <path d="M12 9V6" />
+      <circle cx="12" cy="4" r="1.8" />
+    </svg>
   </button>
-  <div id="assistant-panel" class="assistant-panel card" role="dialog" aria-modal="true" aria-labelledby="assistant-panel-title" hidden>
+  <div id="assistant-panel" class="assistant-panel card" role="dialog" aria-modal="false" aria-labelledby="assistant-panel-title">
     <div class="assistant-panel__head">
-      <h2 id="assistant-panel-title" class="assistant-panel__title">Ask about this snapshot</h2>
-      <button type="button" class="btn btn--sm btn--ghost" id="assistant-close" aria-label="Close chat">Close</button>
+      <h2 id="assistant-panel-title" class="assistant-panel__title">{% if assistant_chat_page == "general" %}Ask the guide{% elif assistant_chat_page == "notifications" %}Alerts &amp; news guide{% elif assistant_chat_page == "evacuation" %}Evacuation &amp; traffic guide{% else %}Ask about this snapshot{% endif %}</h2>
+      <div class="assistant-panel__actions">
+        <button type="button" class="btn btn--sm btn--ghost" id="assistant-expand" aria-pressed="false" aria-label="Expand chat panel">Expand</button>
+        <button type="button" class="btn btn--sm btn--ghost" id="assistant-close" aria-label="Close chat">Close</button>
+      </div>
     </div>
-    <p class="assistant-panel__lead muted">Uses the data currently on this page. Planning aid only — verify with <a href="https://www.weather.gov/tbw/" rel="noopener">NWS</a> and your county.</p>
+    <p class="assistant-panel__lead muted">{% if assistant_chat_page == "general" %}Short answers about this app and Tampa Bay readiness. Not official guidance — check <a href="https://www.weather.gov/tbw/" rel="noopener">NWS</a> and your county.{% elif assistant_chat_page == "notifications" %}Email preferences and headlines from the app database — planning context only. Verify everything with <a href="https://www.weather.gov/tbw/" rel="noopener">NWS Tampa Bay</a> and your county.{% elif assistant_chat_page == "evacuation" %}Uses evacuation zones, nearby road feeds, and regional traffic counts on this page — planning cues only, not orders. Check <a href="https://www.weather.gov/tbw/" rel="noopener">NWS</a>, your county EM, and <a href="https://www.fl511.com/" rel="noopener">FL511</a>.{% else %}Uses what’s on this page. Not official guidance — check <a href="https://www.weather.gov/tbw/" rel="noopener">NWS</a> and your county.{% endif %}</p>
+    <div class="assistant-toolbar" role="toolbar" aria-label="Guide shortcuts">
+      {% if assistant_chat_page == "general" %}
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('dashboard_page') }}">Open dashboard</a>
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('evacuation_page') }}">Evac &amp; traffic</a>
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('homes_page') }}">Home risk</a>
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('notifications_page') }}">Alerts &amp; news</a>
+      {% elif assistant_chat_page == "notifications" %}
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('dashboard_page') }}">Open dashboard</a>
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('evacuation_page') }}">Evac &amp; traffic</a>
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('homes_page') }}">Home risk</a>
+      {% else %}
+      <button type="button" class="btn btn--sm btn--ghost" id="assistant-btn-load">
+        {% if assistant_chat_page == "home_risk" %}Load assessment{% elif assistant_chat_page == "evacuation" %}Refresh evacuation data{% else %}Load dashboard snapshot{% endif %}
+      </button>
+      {% if assistant_chat_page == "evacuation" %}
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('dashboard_page') }}">Readiness dashboard</a>
+      {% else %}
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('evacuation_page') }}">Evac &amp; traffic</a>
+      {% endif %}
+      {% endif %}
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('faq_page') }}">FAQ</a>
+      <a class="btn btn--sm btn--ghost" href="{{ url_for('how_scores_page') }}">How scores work</a>
+    </div>
+    {% if assistant_chat_page == "home_risk" %}
+    <div id="assistant-address-wrap" class="assistant-address-wrap" hidden>
+      <label class="assistant-label" for="assistant-addr-input">Address or ZIP</label>
+      <div class="assistant-address-flex">
+        <div class="assistant-address-flex__field" id="assistant-addr-field">
+          <input type="text" id="assistant-addr-input" class="assistant-address-input" placeholder="Start typing — suggestions like the main form" maxlength="240" />
+        </div>
+        <button type="button" class="btn btn--sm btn--primary" id="assistant-addr-submit">Assess</button>
+      </div>
+    </div>
+    {% endif %}
     <div id="assistant-messages" class="assistant-messages" aria-live="polite"></div>
-    <p class="assistant-status muted" id="assistant-status" role="status"></p>
+    <p class="assistant-status" id="assistant-status" role="status"></p>
     <form id="assistant-form" class="assistant-form">
       <label class="assistant-label" for="assistant-input">Your question</label>
-      <textarea id="assistant-input" class="assistant-input" name="q" rows="2" placeholder="e.g. What does this risk score mean for us tonight?" autocomplete="off" required></textarea>
+      <textarea id="assistant-input" class="assistant-input" name="q" rows="2" placeholder="Or pick a quick question below" autocomplete="off" required></textarea>
+      <p class="assistant-starters-label muted" id="assistant-starters-label">Quick questions</p>
+      <div id="assistant-starters" class="assistant-starters" role="group" aria-label="Quick questions"></div>
       <button type="submit" class="btn btn--primary btn--sm" id="assistant-send">Send</button>
     </form>
   </div>

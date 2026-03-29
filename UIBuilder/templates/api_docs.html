@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Data API{% endblock %}
+{% block main_class %} main--dash{% endblock %}
+{% block content %}
+<div class="dash api-docs-page">
+  <header class="dash-header">
+    <div class="dash-header__lead">
+      <p class="dash-kicker">Developers</p>
+      <h1 class="dash-title">Data API</h1>
+      <p class="dash-lede api-docs-intro">
+        Read-only JSON backed by this app’s SQLite catalog and ingested feeds. Examples use placeholders — swap in your own values.
+        Downloadable reports and AI text omit internal route strings; use this page for query shapes.
+      </p>
+    </div>
+  </header>
+
+  <section class="api-docs-endpoint api-docs-endpoint--accent" aria-labelledby="ep-keys">
+    <h2 class="api-docs-endpoint__title" id="ep-keys">API access</h2>
+    <p class="api-docs-endpoint__desc">
+      Generate a personal key to call <code class="api-docs-inline-code">/api/news/feed</code> with <strong>saved-home ranking</strong> and an optional <code class="api-docs-inline-code">house_name</code> that matches a profile nickname.
+      Prefer the <code class="api-docs-inline-code">X-API-Key</code> header (or <code class="api-docs-inline-code">Authorization: Bearer {api_key}</code>) — avoid putting keys in shared URLs.
+    </p>
+    {% if current_user %}
+    <p class="api-docs-key-actions">
+      <button type="button" class="btn btn--primary btn--sm" id="btn-generate-api-key">Generate my API key</button>
+      <span class="muted api-docs-key-hint">Shown once per generation — previous keys are replaced.</span>
+    </p>
+    <pre class="api-docs-key-reveal" id="api-key-reveal" hidden tabindex="0"></pre>
+    <p class="api-docs-key-error" id="api-key-error" hidden role="alert"></p>
+    {% else %}
+    <p class="muted"><a href="{{ url_for('login', next=url_for('data_api_page')) }}">Log in</a> to create an API key.</p>
+    {% endif %}
+    {% if support_mailto_api_limits %}
+    <p class="api-docs-limits">
+      <span class="muted">Need higher rate limits or a custom integration?</span>
+      <a class="btn btn--sm btn--ghost" href="{{ support_mailto_api_limits }}">Email us</a>
+    </p>
+    {% elif support_contact_email %}
+    <p class="muted api-docs-limits">Contact: {{ support_contact_email }}</p>
+    {% endif %}
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-news-feed">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-news-feed">GET</span>
+      <code class="api-docs-path">/api/news/feed</code>
+    </div>
+    <p class="api-docs-endpoint__desc">SQLite <code class="api-docs-inline-code">news_feed_items</code>. Without a key: public list. With <code class="api-docs-inline-code">{api_key}</code>: rows ranked like the Alerts page using your saved homes; add <code class="api-docs-inline-code">house_name</code> to scope to one nickname.</p>
+    <table class="api-docs-params">
+      <thead>
+        <tr><th scope="col">Query / header</th><th scope="col">Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>api_key</code> (optional)</td><td>Query alternative; header preferred.</td></tr>
+        <tr><td><code>X-API-Key</code> or <code>Authorization: Bearer …</code></td><td>Personal key from Generate.</td></tr>
+        <tr><td><code>house_name</code></td><td>Saved profile nickname (required match when using a key for personalization).</td></tr>
+        <tr><td><code>limit</code>, <code>offset</code>, <code>source</code></td><td>Pagination and source filter (same as public).</td></tr>
+      </tbody>
+    </table>
+    <p class="api-docs-badge">Examples</p>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/news/feed?limit=15&amp;offset=0</code></pre>
+    </div>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>GET /api/news/feed?limit=20&amp;house_name={house_name}
+Header: X-API-Key: {api_key}</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-tampa-lookup">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-tampa-lookup">GET</span>
+      <code class="api-docs-path">/api/tampa/lookup</code>
+    </div>
+    <p class="api-docs-endpoint__desc">Address → geocode + dashboard + regional bundle.</p>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/tampa/lookup?q={home_address}</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-dashboard">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-dashboard">GET</span>
+      <code class="api-docs-path">/api/dashboard</code>
+    </div>
+    <p class="api-docs-endpoint__desc">Threat index for coordinates.</p>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/dashboard?lat={latitude}&amp;lon={longitude}&amp;include_tampa=1</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-tampa-hub">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-tampa-hub">GET</span>
+      <code class="api-docs-path">/api/tampa/hub</code>
+    </div>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/tampa/hub?lat={latitude}&amp;lon={longitude}&amp;verbose=0</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-tampa-point">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-tampa-point">GET</span>
+      <code class="api-docs-path">/api/tampa/point</code>
+    </div>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/tampa/point?lat={latitude}&amp;lon={longitude}</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-zip">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-zip">GET</span>
+      <code class="api-docs-path">/api/tampa/zip/&lt;zip_code&gt;</code>
+    </div>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/tampa/zip/{zip_code}</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-zip-search">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-zip-search">GET</span>
+      <code class="api-docs-path">/api/tampa/zips/search</code>
+    </div>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/tampa/zips/search?q={city_or_zip_fragment}</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-zip-stats">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-zip-stats">GET</span>
+      <code class="api-docs-path">/api/tampa/zips/stats</code>
+    </div>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/tampa/zips/stats</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-geocode">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-geocode">GET</span>
+      <code class="api-docs-path">/api/geocode/suggest</code>
+    </div>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/geocode/suggest?q={address_prefix}</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-report">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-report">GET</span>
+      <code class="api-docs-path">/api/report</code>
+    </div>
+    <p class="api-docs-endpoint__desc">Plain-text situation summary (internal paths stripped).</p>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/report?lat={latitude}&amp;lon={longitude}</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint" aria-labelledby="ep-catalog">
+    <div class="api-docs-endpoint__head">
+      <span class="api-docs-method api-docs-method--get" id="ep-catalog">GET</span>
+      <code class="api-docs-path">/api/endpoints</code>
+    </div>
+    <p class="api-docs-endpoint__desc">Machine catalog of upstream integrations.</p>
+    <div class="api-docs-query-box">
+      <pre class="api-docs-pre-wrap" tabindex="0"><code>/api/endpoints</code></pre>
+    </div>
+  </section>
+
+  <section class="api-docs-endpoint api-docs-endpoint--note" aria-labelledby="ep-auth-note">
+    <h2 class="api-docs-endpoint__title" id="ep-auth-note">Session-only</h2>
+    <p class="api-docs-endpoint__desc">
+      Full home assessment JSON and profile CRUD require a logged-in browser session — not shown here as copy-paste routes.
+    </p>
+  </section>
+
+  <p class="faq-foot muted">
+    <a href="{{ url_for('faq_page') }}">FAQ</a> ·
+    <a href="{{ url_for('how_scores_page') }}">How scores work</a> ·
+    <a href="{{ url_for('dashboard_page') }}">Dashboard</a>
+  </p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', filename='js/api-docs.js') }}"></script>
+{% endblock %}

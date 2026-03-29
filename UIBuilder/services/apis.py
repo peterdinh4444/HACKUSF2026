@@ -84,7 +84,7 @@ def catalog_endpoints() -> list[dict[str, Any]]:
             ],
             "post_body": '{"address": "500 Channelside Dr, Tampa FL"} or {"lat": 27.95, "lon": -82.45, "compact": true}',
             "schemas": ["hurricane_hub.home_assessment.full.v1", "hurricane_hub.home_assessment.compact.v1"],
-            "page": "/how-scores",
+            "page": "/faq",
         },
         {
             "name": "NOAA CO-OPS (water level, wind, air pressure, predictions)",
@@ -245,6 +245,75 @@ def catalog_endpoints() -> list[dict[str, Any]]:
             "name": "FDOT — Florida Power Outages View (ArcGIS)",
             "use": "Aggregated outage polygons (useful regional ‘lights out’ context)",
             "example": "https://services.arcgis.com/3wFbqsFPLeKqOlIK/ArcGIS/rest/services/Florida_Power_Outages_View/FeatureServer/0/query",
+        },
+        {
+            "name": "Hurricane Hub — Unified news ingest (this app)",
+            "use": (
+                "POST /api/news/ingest loads Mediastack (Tampa sources + storm keywords), GNews (historic window), "
+                "FDEM RSS (URL configurable — legacy /rss often 404), NHC Atlantic RSS, NWS alerts filtered to TBW, "
+                "Reddit r/tampa + r/stpetersburg (keyword filter), and a Hillsborough Stay Safe page snapshot. "
+                "GET /api/news/feed reads SQLite table news_feed_items."
+            ),
+            "path": "/api/news/feed",
+            "ingest_path": "/api/news/ingest",
+            "env": "MEDIASTACK_ACCESS_KEY, GNEWS_API_KEY, FDEM_RSS_URL (optional), NEWS_INGEST_SECRET (optional)",
+        },
+        {
+            "name": "Mediastack — Tampa TV / paper sources",
+            "use": "Filter local outlets + hurricane keywords; optional historical `date` (YYYY-MM-DD)",
+            "base": "http://api.mediastack.com/v1/news",
+            "example": (
+                "?access_key=…&countries=us&languages=en&sources=tampabay,wtsp,wfla"
+                "&keywords=hurricane,storm,surge&limit=25"
+            ),
+            "env": "MEDIASTACK_ACCESS_KEY (alias MEDIASTACK_API_KEY); optional MEDIASTACK_SOURCES, MEDIASTACK_KEYWORDS",
+        },
+        {
+            "name": "GNews — search + historic range",
+            "use": "Tampa Bay storm coverage; from / to ISO 8601 for past windows",
+            "base": "https://gnews.io/api/v4/search",
+            "example": "?token=…&q=Tampa+hurricane&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z&country=us&lang=en",
+            "env": "GNEWS_API_KEY; optional GNEWS_QUERY, GNEWS_HISTORIC_DAYS (default 30)",
+        },
+        {
+            "name": "NewsAPI.ai (Event Registry) — geo sources",
+            "use": (
+                "Commercial API: sourceLocationUri for Tampa / St. Petersburg — not wired; "
+                "extend news_ingest with the same news_feed_items row shape."
+            ),
+            "docs": "https://newsapi.ai/documentation",
+            "env": "NEWSAPI_AI_KEY (optional future)",
+        },
+        {
+            "name": "Florida Disaster — RSS (verify current URL)",
+            "use": "State EM bulletins when the site exposes a working XML feed",
+            "note": "https://www.floridadisaster.org/rss often returns HTML 404; set FDEM_RSS_URL from floridadisaster.org/embed-rss-feeds/ when available.",
+            "env": "FDEM_RSS_URL",
+        },
+        {
+            "name": "NHC — Atlantic tropical RSS",
+            "use": "Official active-cyclone capsule (ingested as source nhc_rss)",
+            "example": "https://www.nhc.noaa.gov/index-at.xml",
+        },
+        {
+            "name": "NWS API — TBW-issued alerts (subset)",
+            "use": "GET /alerts/active?area=FL then filter sender for Tampa Bay (TBW)",
+            "base": f"{NWS_API}/alerts/active",
+        },
+        {
+            "name": "Reddit — r/tampa, r/stpetersburg JSON",
+            "use": "…/new.json — keyword filter for storm / flood / power / evac",
+            "policy": "https://github.com/reddit-archive/reddit/wiki/api",
+        },
+        {
+            "name": "X (Twitter) API v2",
+            "use": "Official account filters — not implemented (keys, rate limits)",
+            "example_query": "(from:NWSTampaBay OR from:HillsboroughFL) hurricane",
+        },
+        {
+            "name": "Hillsborough County — Stay Safe",
+            "use": "Best-effort HTML snapshot for EOC / level language (no public JSON API)",
+            "example": "https://www.hillsboroughcounty.org/en/residents/stay-safe",
         },
     ]
 
@@ -691,7 +760,7 @@ def _strip_raw(d: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def aggregate_dashboard(lat: float | None = None, lon: float | None = None, verbose: bool = False) -> dict[str, Any]:
+def _aggregate_dashboard_uncached(lat: float | None = None, lon: float | None = None, verbose: bool = False) -> dict[str, Any]:
     lat = lat if lat is not None else DEFAULT_LAT
     lon = lon if lon is not None else DEFAULT_LON
 
@@ -803,6 +872,13 @@ def aggregate_dashboard(lat: float | None = None, lon: float | None = None, verb
             }
 
     return result
+
+
+def aggregate_dashboard(lat: float | None = None, lon: float | None = None, verbose: bool = False) -> dict[str, Any]:
+    from services.geo_bundle_cache import get_or_build_dashboard_regional_pair
+
+    dash, _ = get_or_build_dashboard_regional_pair(lat, lon, verbose=verbose)
+    return dash
 
 
 def _more_apis_reference() -> dict[str, Any]:

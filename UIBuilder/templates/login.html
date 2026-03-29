@@ -3,7 +3,7 @@
 {% block content %}
 <section class="auth-card">
   <h1 class="page-title">Log in</h1>
-  <p class="lede">Access saved home profiles and risk assessments.</p>
+  <p class="lede">Access saved home profiles and risk assessments. If your account uses email verification, you’ll enter a one-time code after your password.</p>
   <form class="stack-form" method="post" action="{{ url_for('login') }}">
     <input type="hidden" name="next" value="{{ next_url or '' }}" />
     <label class="field">

@@ -1,11 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Tampa Bay storm readiness{% endblock %}
 {% block main_class %} main--landing{% endblock %}
-{% block head_extra %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
-{% endblock %}
 {% block content %}
 <div class="landing">
   <header class="landing-hero">
@@ -16,12 +11,15 @@
     </p>
     <div class="landing-actions">
       <a class="btn btn--primary" href="{{ url_for('dashboard_page') }}">Open readiness dashboard</a>
-      <a class="btn btn--ghost" href="#hub-heatmap">Jump to live map</a>
+      <a class="btn btn--ghost" href="{{ url_for('evacuation_page') }}">Evacuation &amp; traffic</a>
+      <a class="btn btn--ghost" href="{{ url_for('faq_page') }}">FAQ</a>
       <a class="btn btn--ghost" href="{{ url_for('how_scores_page') }}">How scores work</a>
       <a class="btn btn--ghost" href="{{ url_for('homes_page') }}">Home risk</a>
-      <p class="landing-actions__note">Home risk uses a free account so you can save addresses.</p>
+      <p class="landing-actions__note">Free account: save homes, <strong>Ask AI</strong> on topics, evacuation route sketches, and the in-page guide — <a href="{{ url_for('login', next=request.path) }}">log in</a> or <a href="{{ url_for('register') }}">sign up</a>.</p>
     </div>
   </header>
+
+  {% include '_guest_ai_nudge.html' %}
 
   <hr class="landing-divider" aria-hidden="true" />
 
@@ -30,7 +28,7 @@
     <div class="landing-grid">
       <div class="landing-point">
         <h3 class="landing-point__title">See a single snapshot</h3>
-        <p class="landing-point__text">A 0–100 readiness index and short summary, built from the same public endpoints we cite—so you know where the number comes from.</p>
+        <p class="landing-point__text">A 0–100 readiness index and short summary from the same public weather and water feeds — so you can see how the number is built.</p>
       </div>
       <div class="landing-point">
         <h3 class="landing-point__title">Drill down on demand</h3>
@@ -38,26 +36,12 @@
       </div>
       <div class="landing-point">
         <h3 class="landing-point__title">Assess a specific address</h3>
-        <p class="landing-point__text">Sign in to run a Tampa Bay–aware home assessment, keep profiles, and sketch evacuation drive estimates when you need them.</p>
+        <p class="landing-point__text">Sign in to run a Tampa Bay–aware home assessment, keep profiles, sketch evacuation drive estimates, and use <strong>Ask AI</strong> plus the floating guide on your snapshot.</p>
       </div>
-    </div>
-
-    <div id="hub-heatmap" class="panel" style="margin-top: 1rem;">
-      <h3 class="card__title">Live flood risk heat map</h3>
-      <p class="landing-point__text">Tampa metro ZIP intensity map powered by Hurricane Hub threat scoring.</p>
-    </div>
-    <div class="panel">
-      <h3 class="card__title">Simulation mode</h3>
-      <div class="homes-actions">
-        <button type="button" class="btn btn--primary" id="hub-btn-realtime">Real-time</button>
-        <button type="button" class="btn" id="hub-btn-mild">Mild storm</button>
-        <button type="button" class="btn" id="hub-btn-big">Big storm</button>
+      <div class="landing-point">
+        <h3 class="landing-point__title">Evacuation &amp; live traffic</h3>
+        <p class="landing-point__text">Open the <a href="{{ url_for('evacuation_page') }}">Evacuation &amp; traffic</a> page for zone lookup at your pin, nearby road incidents from public feeds, regional FL511 counts, and a readiness checklist — alongside the main dashboard.</p>
       </div>
-      <p class="panel__hint" id="hub-sim-status">Currently showing real-time data.</p>
-    </div>
-    <div class="panel">
-      <div id="hub-heatmap-canvas" style="height: 520px; width: 100%;"></div>
-      <p class="panel__hint">Blue indicates lower threat intensity; red indicates higher threat intensity.</p>
     </div>
   </section>
 
@@ -65,7 +49,4 @@
     Always follow <a href="https://www.weather.gov/tbw/" rel="noopener">NWS Tampa Bay</a> and your county emergency manager. This site does not replace official warnings or orders.
   </p>
 </div>
-{% endblock %}
-{% block scripts %}
-<script src="{{ url_for('static', filename='js/dashboard-heatmap.js') }}"></script>
 {% endblock %}

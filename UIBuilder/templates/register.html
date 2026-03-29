@@ -2,9 +2,21 @@
 {% block title %}Sign up{% endblock %}
 {% block content %}
 <section class="auth-card">
-  <h1 class="page-title">Create account</h1>
-  <p class="lede">Local SQLite account — credentials stay in <code class="inline-code">data/auth.db</code> on this server.</p>
+  <h1 class="page-title">{% if account_created %}Account ready{% else %}Create account{% endif %}</h1>
+  {% if account_created %}
+  <div class="auth-success card" role="status">
+    <p class="auth-success__title">You’re signed up.</p>
+    <p class="lede auth-success__lede">This server isn’t sending verification email — you’re ready to go. Log in with the username and password you just chose.</p>
+    <a class="btn btn--primary btn--block" href="{{ url_for('login') }}">Log in</a>
+    <p class="auth-foot auth-success__foot"><a href="{{ url_for('register') }}">Create another account</a></p>
+  </div>
+  {% else %}
+  <p class="lede">Local SQLite account — credentials stay in <code class="inline-code">data/auth.db</code> on this server. When email is configured on this server, you’ll go straight to a <strong>verification code</strong> screen after you submit — check your inbox before the account is active.</p>
   <form class="stack-form" method="post" action="{{ url_for('register') }}">
+    <label class="field">
+      <span class="field__label">Email</span>
+      <input class="field__input" type="email" name="email" autocomplete="email" required />
+    </label>
     <label class="field">
       <span class="field__label">Username</span>
       <input class="field__input" type="text" name="username" autocomplete="username" minlength="2" required />
@@ -13,8 +25,16 @@
       <span class="field__label">Password</span>
       <input class="field__input" type="password" name="password" autocomplete="new-password" minlength="6" required />
     </label>
+    <div class="field field--checkbox">
+      <span class="field__label">Email alerts (optional)</span>
+      <div class="field__checkbox-row">
+        <input type="checkbox" name="alert_severity_email" id="reg-alert-severity" />
+        <label for="reg-alert-severity" class="field__checkbox-label">Email me if my dashboard or home snapshot <strong>tier</strong> gets worse (low → elevated → high → extreme). Requires a verified email; you can change this anytime on the dashboard or home risk page.</label>
+      </div>
+    </div>
     <button type="submit" class="btn btn--primary btn--block">Create account</button>
   </form>
   <p class="auth-foot">Already have an account? <a href="{{ url_for('login') }}">Log in</a></p>
+  {% endif %}
 </section>
 {% endblock %}

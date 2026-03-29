@@ -482,7 +482,7 @@ def _fetch_usgs_iv_sites(site_ids: tuple[str, ...]) -> dict[str, Any]:
     return {"source": "USGS NWIS iv (Tampa-focused)", "status": status, "parsed": parsed, "raw": data}
 
 
-def regional_lookup(lat: float, lon: float) -> dict[str, Any]:
+def _regional_lookup_compute(lat: float, lon: float) -> dict[str, Any]:
     return {
         "evacuation": evacuation_for_point(lat, lon),
         "traffic_fl511": fl511_tampa_bay_summary(),
@@ -495,3 +495,12 @@ def regional_lookup(lat: float, lon: float) -> dict[str, Any]:
             "teco_outage_portal": "https://account.tecoenergy.com/Outage/Outagemap (consumer map; may differ from public GIS feeds)",
         },
     }
+
+
+def regional_lookup(lat: float, lon: float) -> dict[str, Any]:
+    from services.geo_bundle_cache import try_regional_from_cache
+
+    cached = try_regional_from_cache(lat, lon)
+    if cached is not None:
+        return cached
+    return _regional_lookup_compute(lat, lon)

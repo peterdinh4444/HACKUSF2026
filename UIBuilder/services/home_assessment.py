@@ -4,12 +4,10 @@ Bundle geocode + dashboard + regional feeds into a single home risk payload for 
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from services.apis import aggregate_dashboard
+from services.geo_bundle_cache import get_or_build_dashboard_regional_pair
 from services.geocode import nominatim_search
-from services.regional_tampa import regional_lookup
 from services.tampa_db import get_by_zip
 
 
@@ -118,11 +116,7 @@ def assess_address(address: str, save_nickname: str | None = None) -> dict[str, 
             "display_name": f"{zip_row.get('city')}, {zip_row.get('county')} {z} (centroid)",
             "address": {"postcode": z, "city": zip_row.get("city"), "county": zip_row.get("county")},
         }
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_d = pool.submit(aggregate_dashboard, lat, lon, False)
-            f_r = pool.submit(regional_lookup, lat, lon)
-            dashboard = f_d.result()
-            regional = f_r.result()
+        dashboard, regional = get_or_build_dashboard_regional_pair(lat, lon, verbose=False)
         risk = build_risk_card(dashboard, regional, zip_row)
         return {
             "query": address,
@@ -153,11 +147,7 @@ def assess_address(address: str, save_nickname: str | None = None) -> dict[str, 
         z = None
     zip_row = get_by_zip(z) if z else None
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_d = pool.submit(aggregate_dashboard, lat, lon, False)
-        f_r = pool.submit(regional_lookup, lat, lon)
-        dashboard = f_d.result()
-        regional = f_r.result()
+    dashboard, regional = get_or_build_dashboard_regional_pair(lat, lon, verbose=False)
 
     risk = build_risk_card(dashboard, regional, zip_row)
     return {
@@ -188,11 +178,7 @@ def assess_coordinates(
         "display_name": label or f"{lat:.4f}°, {lon:.4f}°",
         "address": {},
     }
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_d = pool.submit(aggregate_dashboard, lat, lon, False)
-        f_r = pool.submit(regional_lookup, lat, lon)
-        dashboard = f_d.result()
-        regional = f_r.result()
+    dashboard, regional = get_or_build_dashboard_regional_pair(lat, lon, verbose=False)
     risk = build_risk_card(dashboard, regional, zip_row)
     mz = None
     if zip_row and isinstance(zip_row.get("zip"), str):
