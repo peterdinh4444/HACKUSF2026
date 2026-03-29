@@ -29,6 +29,16 @@ export function initAssistantDock(expectedPage, getContext) {
     panel.hidden = !open;
     root.classList.toggle("assistant-root--open", open);
     toggle?.setAttribute("aria-expanded", open ? "true" : "false");
+    if (toggle) {
+      if (open) {
+        toggle.hidden = true;
+      } else {
+        window.setTimeout(() => {
+          toggle.hidden = false;
+          toggle.focus();
+        }, 0);
+      }
+    }
     if (open) input?.focus();
   }
 
@@ -36,7 +46,11 @@ export function initAssistantDock(expectedPage, getContext) {
     const willOpen = panel?.hidden !== false;
     setOpen(willOpen);
   });
-  closeBtn?.addEventListener("click", () => setOpen(false));
+  closeBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(false);
+  });
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && root.classList.contains("assistant-root--open")) setOpen(false);
